@@ -7892,12 +7892,9 @@ bot.on("message:text", async (ctx) => {
     await replyRhScan(ctx, hit.ca, "🏦 Scanning Robinhood Chain...");
     return;
   }
+  // Pasted Solana CA → always token scan (never auto wallet).
+  // Wallet analyser only via /wallet (or SNS name resolution above).
   const ca = hit.ca;
-  const tokenMint = await isSolTokenMint(ca);
-  if (!tokenMint) {
-    await replyWalletScan(ctx, ca, "👛 Wallet Behaviour Analyser...");
-    return;
-  }
 
   recordCall(ctx, ca).catch(() => {});
 
