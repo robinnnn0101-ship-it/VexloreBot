@@ -3551,6 +3551,536 @@ function parseHolders(holders, tokenInfo) {
   return { list, total };
 }
 
+/* ───────── Locks: Streamflow / Jupiter / LP (Rugcheck + Solana Tracker) ───────── */
+
+function normalizeLockType(t) {
+  const s = String(t || "").toLowerCase().replace(/[_-\s]/g, "");
+  if (s.includes("streamflow") || s === "stream") return "streamflow";
+  if (s.includes("jupiter")) return "jupiter";
+  if (s.includes("bonfida")) return "bonfida";
+  if (s.includes("raydium")) return "raydium";
+  if (s.includes("meteora")) return "meteora";
+  if (s.includes("fluxbeam")) return "fluxbeam";
+  if (s.includes("burn")) return "burned";
+  return s || "lock";
+}
+
+function lockPlatformLabel(type) {
+  if (type === "streamflow") return "Streamflow";
+  if (type === "jupiter") return "Jupiter";
+  if (type === "bonfida") return "Bonfida";
+  if (type === "raydium") return "Raydium LP";
+  if (type === "meteora") return "Meteora LP";
+  if (type === "fluxbeam") return "Fluxbeam LP";
+  if (type === "burned") return "Burned LP";
+  if (type === "lp") return "LP lock";
+  return type || "Lock";
+}
+
+function parseStLocks(data) {
+  const out = [];
+  if (!data) return out;
+  const list =
+    (Array.isArray(data) && data) ||
+    (Array.isArray(data.locks) && data.locks) ||
+    (Array.isArray(data.data) && data.data) ||
+    (Array.isArray(data.results) && data.results) ||
+    (Array.isArray(data.items) && data.items) ||
+    [];
+  for (const row of list) {
+    if (!row || typeof row !== "object") continue;
+    const type = normalizeLockType(
+      row.platform || row.protocol || row.locker || row.type || row.source || row.program
+    );
+    const usd =
+      num(row.locked_usd) ||
+      num(row.usdcLocked) ||
+      num(row.usdLocked) ||
+      num(row.valueUsd) ||
+      num(row.value_usd) ||
+      num(row.usd) ||
+      null;
+    const pct =
+      num(row.locked_pct) ||
+      num(row.lockedPct) ||
+      num(row.percentage) ||
+      num(row.pct) ||
+      null;
+    const unlock = toDate(
+      row.unlock_at ||
+        row.unlockAt ||
+        row.unlock_date ||
+        row.unlockDate ||
+        row.end ||
+        row.end_time ||
+        row.cliff ||
+        row.unlockTimestamp
+    );
+    const amount =
+      num(row.locked_raw) ||
+      num(row.locked) ||
+      num(row.amount) ||
+      num(row.deposited) ||
+      null;
+    out.push({
+      id: String(row.id || row.address || row.pubkey || row.contract || ""),
+      type,
+      unlock,
+      usd,
+      pct,
+      amount,
+      uri: String(row.uri || row.url || row.link || ""),
+      status: String(row.status || ""),
+    });
+  }
+  return out;
+}
+
+function parseRugcheckLpLocks(data) {
+  const out = [];
+  const markets = (data && data.markets) || [];
+  for (const m of Array.isArray(markets) ? markets : []) {
+    if (!m || typeof m !== "object") continue;
+    const lp = m.lp && typeof m.lp === "object" ? m.lp : m;
+    const lockedPct = num(lp.lpLockedPct) || num(lp.lockedPct) || num(m.lpLockedPct);
+    const lockedUsd = num(lp.lpLockedUSD) || num(lp.lpLockedUsd) || num(lp.usdcLocked);
+    const lockedAmt = num(lp.lpLocked) || num(lp.locked);
+    if (!(lockedPct > 0 || lockedUsd > 0 || lockedAmt > 0)) continue;
+    out.push({
+      id: String(m.pubkey || m.market || ""),
+      type: "lp",
+      unlock: null,
+      usd: lockedUsd,
+      pct: lockedPct,
+      amount: lockedAmt,
+      uri: "",
+      status: lockedPct >= 99.5 ? "fully locked / burned style" : "partial LP lock",
+      marketType: String(m.marketType || m.dex || ""),
+    });
+  }
+  return out;
+}
+
+function parseRugcheckLockers(data) {
+  const out = [];
+  const bag = data && data.lockers;
+  if (!bag || typeof bag !== "object") return out;
+  const entries = Array.isArray(bag) ? bag.map((v, i) => [String(i), v]) : Object.entries(bag);
+  for (const [id, v] of entries) {
+    if (!v || typeof v !== "object") continue;
+    const type = normalizeLockType(v.type || v.programID || v.programId || v.owner);
+    out.push({
+      id: String(id || v.address || ""),
+      type,
+      unlock: toDate(v.unlockDate || v.unlock_date || v.unlockAt),
+      usd: num(v.usdcLocked) || num(v.usdLocked) || num(v.valueUsd) || null,
+      pct: num(v.lockedPct) || num(v.pct) || null,
+      amount: num(v.lockedAmount) || num(v.amount) || null,
+      uri: String(v.uri || ""),
+      status: "",
+      wallet: String(v.owner || v.sender || ""),
+    });
+  }
+  return out;
+}
+
+function isBurnAddress(addr) {
+  const a = String(addr || "").toLowerCase();
+  if (!a) return false;
+  if (a.includes("dead") || a.includes("burn")) return true;
+  if (a.includes("1nc1nerator") || a.includes("incinerator")) return true;
+  if (a.startsWith("11111111111111111111111111111111")) return true;
+  if (/^1{20,}/.test(a)) return true;
+  return false;
+}
+
+/** Burned supply sitting in burn / blackhole wallets */
+function parseRugcheckBurns(data) {
+  const out = [];
+  const holders = (data && data.topHolders) || [];
+  let burnedPct = 0;
+  const wallets = [];
+  for (const h of Array.isArray(holders) ? holders : []) {
+    const owner = String(h.owner || h.address || h.wallet || "");
+    if (!isBurnAddress(owner)) continue;
+    const pct = num(h.pct) || num(h.percentage) || null;
+    if (pct) burnedPct += pct;
+    wallets.push({
+      id: owner,
+      type: "burned",
+      pct,
+      usd: null,
+      amount: num(h.uiAmount) || num(h.amount) || null,
+      wallet: owner,
+      status: "burn / blackhole",
+      unlock: null,
+      uri: "",
+    });
+  }
+  if (wallets.length) {
+    out.push({
+      id: "burn-total",
+      type: "burned",
+      pct: burnedPct > 0 ? burnedPct : null,
+      usd: null,
+      amount: null,
+      wallet: wallets[0].wallet,
+      status:
+        wallets.length +
+        " burn wallet(s)" +
+        (burnedPct > 0 ? " · " + burnedPct.toFixed(2) + "% supply" : ""),
+      unlock: null,
+      uri: "",
+      details: wallets,
+    });
+  }
+  return out;
+}
+
+/** knownAccounts LOCKER / vesting / stream pools */
+function parseRugcheckKnownLockers(data) {
+  const out = [];
+  const ka = data && data.knownAccounts;
+  if (!ka || typeof ka !== "object") return out;
+  const holders = Array.isArray(data.topHolders) ? data.topHolders : [];
+  const holderPct = new Map();
+  for (const h of holders) {
+    const o = String(h.owner || h.address || "").toLowerCase();
+    if (o) holderPct.set(o, num(h.pct) || num(h.percentage) || null);
+  }
+  for (const [addr, info] of Object.entries(ka)) {
+    if (!info || typeof info !== "object") continue;
+    const t = String(info.type || "").toUpperCase();
+    const name = String(info.name || "");
+    const isLock =
+      t.includes("LOCK") ||
+      t.includes("VEST") ||
+      t.includes("STREAM") ||
+      /streamflow|jupiter\s*lock|vesting|timelock|stake pool/i.test(name);
+    if (!isLock) continue;
+    const pct = holderPct.get(String(addr).toLowerCase()) || null;
+    let type = "lock";
+    if (/streamflow/i.test(name + t)) type = "streamflow";
+    else if (/jupiter/i.test(name + t)) type = "jupiter";
+    else if (/burn/i.test(name + t)) type = "burned";
+    out.push({
+      id: String(addr),
+      type,
+      wallet: String(addr),
+      pct,
+      usd: null,
+      amount: null,
+      unlock: null,
+      uri: "",
+      status: name || t || "locker",
+    });
+  }
+  return out;
+}
+
+const SOL_RPCS = [
+  "https://api.mainnet-beta.solana.com",
+  "https://solana-rpc.publicnode.com",
+  "https://rpc.ankr.com/solana",
+];
+
+async function solRpc(method, params) {
+  for (const url of SOL_RPCS) {
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "User-Agent": "VEXLORE-Bot" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+        signal: AbortSignal.timeout(14000),
+      });
+      const data = await res.json();
+      if (data && data.result !== undefined) return data.result;
+    } catch (_) {}
+  }
+  return null;
+}
+
+function daysBetween(a, b) {
+  if (!a || !b || Number.isNaN(a.getTime()) || Number.isNaN(b.getTime())) return null;
+  return Math.round((b.getTime() - a.getTime()) / 86400000);
+}
+
+function daysHuman(n) {
+  const d = Number(n);
+  if (!Number.isFinite(d)) return "n/a";
+  const a = Math.abs(d);
+  if (a < 1) return d === 0 ? "0d" : "<1d";
+  if (a < 30) return Math.round(d) + "d";
+  if (a < 365) return (d / 30).toFixed(1) + "mo";
+  return (d / 365).toFixed(1) + "y";
+}
+
+/** Enrich Streamflow / Jupiter lock with locker wallet + duration via on-chain history */
+async function enrichSupplyLock(row) {
+  if (!row || !row.id) return row;
+  if (row.type !== "streamflow" && row.type !== "jupiter") return row;
+
+  const out = { ...row };
+  const now = new Date();
+
+  if (out.unlock && out.unlock.getTime() > 0) {
+    out.daysLeft = daysBetween(now, out.unlock);
+  }
+
+  try {
+    const sigs = await solRpc("getSignaturesForAddress", [row.id, { limit: 1000 }]);
+    if (Array.isArray(sigs) && sigs.length) {
+      const oldest = sigs[sigs.length - 1];
+      const created = toDate(oldest && oldest.blockTime);
+      if (created) {
+        out.created = created;
+        if (out.unlock && out.unlock.getTime() > 0) {
+          out.daysTotal = daysBetween(created, out.unlock);
+        }
+      }
+      const createSig = oldest && oldest.signature;
+      if (createSig) {
+        const tx = await solRpc("getTransaction", [
+          createSig,
+          { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 },
+        ]);
+        const keys =
+          (tx &&
+            tx.transaction &&
+            tx.transaction.message &&
+            tx.transaction.message.accountKeys) ||
+          [];
+        for (const k of keys) {
+          const pk = typeof k === "string" ? k : k && k.pubkey;
+          const isSigner = typeof k === "object" && k && k.signer;
+          if (pk && isSigner && pk !== row.id) {
+            out.wallet = String(pk);
+            break;
+          }
+        }
+        if (!out.wallet && keys[0]) {
+          const k0 = keys[0];
+          out.wallet = String(typeof k0 === "string" ? k0 : k0.pubkey || "");
+        }
+      }
+    }
+  } catch (_) {}
+
+  if (!out.wallet && row.wallet) out.wallet = row.wallet;
+  if (!out.wallet && row.sender) out.wallet = row.sender;
+  if (row.daysTotal != null && out.daysTotal == null) out.daysTotal = row.daysTotal;
+  if (row.created && !out.created) out.created = toDate(row.created);
+
+  if (!out.uri) {
+    if (out.type === "streamflow" && out.id) {
+      out.uri = "https://app.streamflow.finance/contract/solana/mainnet/" + out.id;
+    } else if (out.type === "jupiter") {
+      out.uri = "https://lock.jup.ag/";
+    }
+  }
+
+  return out;
+}
+
+async function fetchTokenLocks(ca) {
+  if (!isCa(ca) || isEvmCa(ca)) return null;
+
+  const [rug, stLocks] = await Promise.all([
+    soft(jget("https://api.rugcheck.xyz/v1/tokens/" + ca + "/report")),
+    ST_KEY ? soft(st("/tokens/" + ca + "/locks")) : Promise.resolve(null),
+  ]);
+
+  const rows = [];
+  const seen = new Set();
+  const push = (row) => {
+    if (!row) return;
+    const key =
+      (row.type || "") +
+      "|" +
+      (row.id || "") +
+      "|" +
+      (row.usd || "") +
+      "|" +
+      (row.pct || "") +
+      "|" +
+      (row.unlock ? row.unlock.getTime() : "");
+    if (seen.has(key)) return;
+    seen.add(key);
+    rows.push(row);
+  };
+
+  if (rug && rug.ok && rug.data) {
+    for (const r of parseRugcheckLockers(rug.data)) push(r);
+    for (const r of parseRugcheckLpLocks(rug.data)) push(r);
+    for (const r of parseRugcheckBurns(rug.data)) push(r);
+    for (const r of parseRugcheckKnownLockers(rug.data)) push(r);
+  }
+  for (const r of parseStLocks(stLocks)) push(r);
+
+  // Enrich top Streamflow + Jupiter locks with wallet + lock duration
+  const supplyLocks = rows
+    .filter((x) => x.type === "streamflow" || x.type === "jupiter")
+    .slice(0, 6);
+  const enriched = await Promise.all(supplyLocks.map((r) => soft(enrichSupplyLock(r))));
+  for (let i = 0; i < supplyLocks.length; i++) {
+    if (enriched[i]) {
+      const idx = rows.indexOf(supplyLocks[i]);
+      if (idx >= 0) rows[idx] = enriched[i];
+    }
+  }
+
+  rows.sort((a, b) => {
+    const ta = a.type === "streamflow" || a.type === "jupiter" ? 0 : a.type === "lp" ? 1 : 2;
+    const tb = b.type === "streamflow" || b.type === "jupiter" ? 0 : b.type === "lp" ? 1 : 2;
+    if (ta !== tb) return ta - tb;
+    return (Number(b.usd) || Number(b.pct) || 0) - (Number(a.usd) || Number(a.pct) || 0);
+  });
+
+  const streamflow = rows.filter((x) => x.type === "streamflow");
+  const jupiter = rows.filter((x) => x.type === "jupiter");
+  const burned = rows.filter((x) => x.type === "burned");
+  const lp = rows.filter(
+    (x) =>
+      x.type === "lp" ||
+      x.type === "raydium" ||
+      x.type === "meteora" ||
+      x.type === "fluxbeam"
+  );
+  const other = rows.filter(
+    (x) =>
+      x.type !== "streamflow" &&
+      x.type !== "jupiter" &&
+      x.type !== "burned" &&
+      x.type !== "lp" &&
+      x.type !== "raydium" &&
+      x.type !== "meteora" &&
+      x.type !== "fluxbeam"
+  );
+  const totalUsd = rows.reduce((s, x) => s + (Number(x.usd) || 0), 0) || null;
+  const maxLpPct = lp.reduce((m, x) => Math.max(m, Number(x.pct) || 0), 0) || null;
+  const burnedPct = burned.reduce((m, x) => m + (Number(x.pct) || 0), 0) || null;
+
+  return {
+    streamflow,
+    jupiter,
+    burned,
+    lp,
+    other,
+    rows,
+    totalUsd: totalUsd > 0 ? totalUsd : null,
+    maxLpPct,
+    burnedPct: burnedPct > 0 ? burnedPct : null,
+    count: rows.length,
+    ok: !!(rug && rug.ok) || !!stLocks,
+  };
+}
+
+function formatLockRow(row) {
+  const platform = lockPlatformLabel(row.type);
+  const isSupply = row.type === "streamflow" || row.type === "jupiter";
+
+  if (isSupply) {
+    const line1Bits = [];
+    if (row.usd != null) line1Bits.push(money(row.usd));
+    if (row.pct != null) line1Bits.push(Number(row.pct).toFixed(1) + "% supply");
+    if (row.daysTotal != null) line1Bits.push(daysHuman(row.daysTotal) + " lock");
+    else if (row.daysLeft != null && row.daysLeft > 0)
+      line1Bits.push(daysHuman(row.daysLeft) + " left");
+    if (row.status && !row.daysTotal) line1Bits.push(row.status);
+
+    const line2Bits = [];
+    if (row.wallet) line2Bits.push("by " + short(row.wallet));
+    if (row.daysLeft != null) {
+      line2Bits.push(
+        row.daysLeft > 0
+          ? daysHuman(row.daysLeft) + " left"
+          : row.daysLeft === 0
+          ? "unlocks today"
+          : "unlocked"
+      );
+    }
+    if (row.unlock && row.unlock.getTime() > 0) line2Bits.push("until " + utc(row.unlock));
+    if (row.id && row.id !== row.wallet) line2Bits.push(short(row.id));
+
+    let s = "• " + platform + (line1Bits.length ? "  " + line1Bits.join(" · ") : "");
+    if (line2Bits.length) s += "\n  " + line2Bits.join(" · ");
+    return s;
+  }
+
+  if (row.type === "burned") {
+    const bits = [];
+    if (row.pct != null) bits.push(Number(row.pct).toFixed(2) + "% supply");
+    if (row.status) bits.push(row.status);
+    if (row.wallet) bits.push(short(row.wallet));
+    return "• 🔥 Burned" + (bits.length ? "  " + bits.join(" · ") : "");
+  }
+
+  if (row.type === "lock") {
+    const bits = [];
+    if (row.pct != null) bits.push(Number(row.pct).toFixed(2) + "%");
+    if (row.status) bits.push(row.status);
+    if (row.wallet) bits.push(short(row.wallet));
+    return "• Locker" + (bits.length ? "  " + bits.join(" · ") : "");
+  }
+
+  const bits = [];
+  if (row.pct != null) bits.push(Number(row.pct).toFixed(1) + "%");
+  if (row.usd != null) bits.push(money(row.usd));
+  if (row.status) bits.push(row.status);
+  else if (row.unlock && row.unlock.getTime() > 0) bits.push("unlock " + utc(row.unlock));
+  else if (row.unlock && Number(row.unlock) === 0) bits.push("permanent");
+  if (row.marketType) bits.push(String(row.marketType));
+  return "• " + platform + (bits.length ? "  " + bits.join(" · ") : "");
+}
+
+function buildLocksBlock(locks) {
+  if (!locks || (!locks.ok && !locks.count)) {
+    return "🔒 <b>Locks</b>\nCould not load lock / burn data\n";
+  }
+  if (!locks.count) {
+    return (
+      "🔒 <b>Locks · Streamflow · Jupiter · Burn · LP</b>\n" +
+      "No Streamflow, Jupiter, burn, or LP locks found for this mint\n"
+    );
+  }
+
+  const lines = [];
+  for (const row of locks.streamflow.slice(0, 4)) lines.push(formatLockRow(row));
+  for (const row of locks.jupiter.slice(0, 3)) lines.push(formatLockRow(row));
+  for (const row of (locks.burned || []).slice(0, 2)) lines.push(formatLockRow(row));
+  for (const row of locks.lp.slice(0, 2)) lines.push(formatLockRow(row));
+  for (const row of locks.other.slice(0, 3)) lines.push(formatLockRow(row));
+
+  const more =
+    locks.count > lines.length ? "\n… +" + (locks.count - lines.length) + " more" : "";
+
+  const summaryParts = [];
+  if (locks.streamflow.length) summaryParts.push("SF " + locks.streamflow.length);
+  if (locks.jupiter.length) summaryParts.push("Jup " + locks.jupiter.length);
+  if ((locks.burned || []).length) {
+    summaryParts.push(
+      "Burn" +
+        (locks.burnedPct != null ? " " + Number(locks.burnedPct).toFixed(1) + "%" : "")
+    );
+  }
+  if (locks.lp.length) summaryParts.push("LP " + locks.lp.length);
+  if (locks.maxLpPct != null) summaryParts.push("LP locked " + locks.maxLpPct.toFixed(1) + "%");
+  if (locks.totalUsd != null) summaryParts.push("~" + money(locks.totalUsd));
+
+  return (
+    "🔒 <b>Locks · Streamflow · Jupiter · Burn · LP</b>\n" +
+    (summaryParts.length ? summaryParts.join(" · ") + "\n" : "") +
+    lines.join("\n") +
+    more +
+    "\n"
+  );
+}
+
+function boxSection(title, body) {
+  const clean = String(body || "").replace(/\n+$/, "");
+  return "┌─ " + title + "\n" + clean + "\n";
+}
+
 /* ───────── wallet behaviour analyser (solana only) ───────── */
 
 function asWalletList(data, keys) {
@@ -5188,13 +5718,14 @@ async function buildCallouts(ca) {
 }
 
 async function buildReport(ca) {
-  const [pump, pair, paid, tokenInfo, bundlers, holders] = await Promise.all([
+  const [pump, pair, paid, tokenInfo, bundlers, holders, locks] = await Promise.all([
     pumpCoin(ca),
     dexPair(ca),
     dexPaid(ca),
     st("/tokens/" + ca),
     st("/tokens/" + ca + "/bundlers"),
     st("/tokens/" + ca + "/holders?enrich=all"),
+    fetchTokenLocks(ca),
   ]);
 
   const fam = await findOgFamily(ca, pump, pair);
@@ -5296,40 +5827,54 @@ async function buildReport(ca) {
       const live = num(mc) || num(q.price);
       if (entry && live) {
         const m = live / entry;
-        pnlLine = "\n📈 <b>Group call PnL</b> " + xs(m) + " from " + moneyMkt(entry) + " (first scanner)\n";
+        pnlLine = "📈 Group call PnL  " + xs(m) + " from " + moneyMkt(entry) + " (first scanner)\n";
       }
     }
   } catch (_) {}
 
+  const marketBody =
+    "MC " + moneyMkt(mc) + " · FDV " + moneyMkt(q.fdv) + "\n" +
+    "💧 Liq " + moneyMkt(q.liq) + " · 📊 Vol24 " + moneyMkt(q.vol) + "\n" +
+    pnlLine;
+
+  const launchBody =
+    "Pump: " + utc(toDate(pump && pump.created_timestamp)) + "\n" +
+    "Pair: " + utc(toDate(pair && pair.pairCreatedAt)) + "\n" +
+    esc(ogLine(fam));
+
+  const bundleBody =
+    esc(bundleBlock) + "\n" +
+    "🎯 Snipers " + sniperPct.toFixed(1) + "% · Insiders " + insiderPct.toFixed(1) + "%";
+
+  const holderBody = ST_KEY
+    ? esc(holderCountLine + (hLines.join("\n") || "none")) +
+      "\n⏱ avg hold " +
+      (avgHold == null ? "n/a" : holdHuman(avgHold)) +
+      " · avg PnL " +
+      (avgPnl == null ? "n/a" : money(avgPnl))
+    : "add Data API key";
+
+  const paidBody =
+    esc(paidBlock) + "\n🚀 Boosts: " + ((pair && pair.boosts && pair.boosts.active) ?? "n/a");
+
+  const loreBody =
+    L.score + "/100  " + esc(L.verdict) + "\n" +
+    esc(L.desc) + "\n" +
+    esc(L.notes.join(" · "));
+
   return (
     badge + "  <b>" + esc(name) + " (" + esc(symbol) + ")</b>\n" +
     "<code>" + esc(ca) + "</code>\n\n" +
-    "💰 <b>Market</b>\n" +
-    "MC " + moneyMkt(mc) + " · FDV " + moneyMkt(q.fdv) + "\n" +
-    "💧 Liq " + moneyMkt(q.liq) + " · 📊 Vol24 " + moneyMkt(q.vol) +
-    pnlLine + "\n" +
-    "🕐 <b>Launch UTC</b>\n" +
-    "Pump: " + utc(toDate(pump && pump.created_timestamp)) + "\n" +
-    "Pair: " + utc(toDate(pair && pair.pairCreatedAt)) + "\n" +
-    esc(ogLine(fam)) + "\n\n" +
-    "📦 <b>Bundles</b>\n" +
-    esc(bundleBlock) + "\n" +
-    "🎯 Snipers " + sniperPct.toFixed(1) + "% · Insiders " + insiderPct.toFixed(1) + "%\n\n" +
-    "👛 <b>Top holders</b>\n" +
-    esc(ST_KEY ? holderCountLine + (hLines.join("\n") || "none") : "add Data API key") + "\n" +
-    (ST_KEY
-      ? "⏱ avg hold " + (avgHold == null ? "n/a" : holdHuman(avgHold)) + " · avg PnL " + (avgPnl == null ? "n/a" : money(avgPnl)) + "\n"
-      : "") +
-    "\n🧾 <b>Dex paid</b>\n" +
-    esc(paidBlock) + "\n" +
-    "🚀 Boosts: " + ((pair && pair.boosts && pair.boosts.active) ?? "n/a") + "\n" +
-    (q.url ? q.url + "\n" : "") +
+    boxSection("💰 Market", marketBody) + "\n" +
+    boxSection("🕐 Launch UTC", launchBody) + "\n" +
+    boxSection("📦 Bundles", bundleBody) + "\n" +
+    buildLocksBlock(locks) + "\n" +
+    boxSection("👛 Top holders", holderBody) + "\n" +
+    boxSection("🧾 Dex paid", paidBody) +
+    (q.url ? "\n🔗 " + q.url + "\n" : "\n") +
+    (x ? "\n" + esc(x) + "\n" : "") +
     "\n" +
-    esc(x) +
-    "\n\n" +
-    "🧠 <b>Lore " + L.score + "/100</b> " + esc(L.verdict) + "\n" +
-    esc(L.desc) + "\n" +
-    esc(L.notes.join(" · ")) +
+    boxSection("🧠 Lore", loreBody) +
     FOOTER
   ).slice(0, 4000);
 }
@@ -5874,7 +6419,259 @@ function rateGithub(repo, owner) {
   else if (score >= 55) verdict = "⚠️ mixed";
   return { score, verdict, notes };
 }
+function looksPumpGithubHit(row, login) {
+  const needle = String(login || "").toLowerCase();
+  if (!needle || !row) return false;
+  const blob = [
+    row.website,
+    row.twitter,
+    row.telegram,
+    row.description,
+    row.name,
+    row.symbol,
+  ]
+    .map((x) => String(x || "").toLowerCase())
+    .join(" ");
+  return blob.includes("github.com/" + needle);
+}
 
+async function searchPumpGithubFeeTokens(login) {
+  const q = String(login || "").trim();
+  if (!q) return [];
+  const queries = ["github.com/" + q, q];
+  const map = new Map();
+
+  for (const term of queries) {
+    const coins = await soft(
+      pumpSearch({
+        limit: "50",
+        offset: "0",
+        searchTerm: term,
+        sort: "usd_market_cap",
+        order: "DESC",
+        includeNsfw: "false",
+      })
+    );
+    for (const c of coins || []) {
+      if (!c || !c.mint) continue;
+      if (!looksPumpGithubHit(c, q)) continue;
+      const prev = map.get(c.mint) || {};
+      map.set(c.mint, {
+        mint: c.mint,
+        name: c.name || prev.name || "",
+        symbol: c.symbol || prev.symbol || "",
+        mc: num(c.usd_market_cap || c.market_cap) || prev.mc,
+        website: c.website || prev.website || "",
+      });
+    }
+  }
+
+  return [...map.values()].sort((a, b) => (b.mc || 0) - (a.mc || 0));
+}
+function solAmt(n) {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return "n/a";
+  if (x <= 0) return "0 SOL";
+  if (x >= 100) return x.toFixed(2) + " SOL";
+  if (x >= 1) return x.toFixed(3) + " SOL";
+  return x.toFixed(4) + " SOL";
+}
+
+function pickSol(...vals) {
+  for (const v of vals) {
+    if (v == null || v === "") continue;
+    if (typeof v === "object") {
+      const inner = pickSol(v.sol, v.amount, v.value, v.claimed, v.earned);
+      if (inner != null) return inner;
+    }
+    const n = Number(v);
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+}
+
+function feeCoinMint(row) {
+  return String(
+    (row && (row.mint || row.address || row.token || (row.coin && (row.coin.mint || row.coin.address)))) ||
+      ""
+  ).trim();
+}
+
+function upsertFeeCoin(map, row) {
+  const mint = feeCoinMint(row);
+  if (!mint) return;
+  const old = map.get(mint) || {};
+  const claimed = pickSol(row.claimed_sol, row.claimed, row.earned && row.earned.sol, row.earned, old.claimed);
+  const unclaimed = pickSol(row.unclaimed_sol, row.unclaimed, old.unclaimed);
+  const earned = pickSol(row.earned_sol, row.total_sol, row.earned && row.earned.sol, old.earned);
+  map.set(mint, {
+    mint,
+    name: row.name || (row.coin && row.coin.name) || old.name || "",
+    symbol: row.symbol || (row.coin && row.coin.symbol) || old.symbol || "",
+    mc: num(row.marketCapUsd || row.usd_market_cap || row.mc) || old.mc,
+    shareBps: row.share_bps || row.bps || old.shareBps,
+    claimed: claimed != null ? claimed : old.claimed,
+    unclaimed: unclaimed != null ? unclaimed : old.unclaimed,
+    earned: earned != null ? earned : old.earned,
+    distributions: row.distributions || old.distributions,
+    lastAt: toDate(row.lastEarnedAt || row.last_claimed_at || row.updatedAt) || old.lastAt,
+  });
+}
+
+async function pumpFeeProxy(q) {
+  const urls = [
+    "https://pumpfun-creator-rewards-lp642k3kpa-uc.a.run.app/api/earnings?q=" + encodeURIComponent(q),
+    "https://pumpfun-creator-rewards-lp642k3kpa-uc.a.run.app/api/fees?q=" + encodeURIComponent(q),
+  ];
+  for (const u of urls) {
+    const r = await soft(jget(u));
+    if (r && r.ok && r.data && (r.data.totals || r.data.coins || r.data.resolved)) return r.data;
+  }
+  return null;
+}
+
+async function pumpSwapFees(addr) {
+  if (!addr) return null;
+  const base = "https://swap-api.pump.fun/v1/fee-sharing/account/" + encodeURIComponent(addr);
+  const [totals, shares] = await Promise.all([
+    soft(jget(base + "/totals")),
+    soft(jget(base + "/shares")),
+  ]);
+  if (!(totals && totals.ok) && !(shares && shares.ok)) return null;
+  return {
+    totals: totals && totals.data,
+    shares: shares && shares.data,
+  };
+}
+
+async function pumpFeeByGithub(login, githubId) {
+  const queries = [...new Set([String(login || ""), String(githubId || "")].filter(Boolean))];
+  let proxy = null;
+  for (const q of queries) {
+    proxy = await pumpFeeProxy(q);
+    if (proxy) break;
+  }
+
+  const wallet =
+    (proxy && proxy.resolved && (proxy.resolved.wallet || proxy.resolved.address || proxy.resolved.pda)) ||
+    "";
+  const swap = wallet ? await pumpSwapFees(wallet) : null;
+
+  const map = new Map();
+  const bags = [
+    proxy && proxy.coins,
+    proxy && proxy.coinEarnings,
+    swap && swap.shares && (swap.shares.shares || swap.shares.coins || swap.shares.items || swap.shares),
+  ];
+  for (const bag of bags) {
+    for (const row of Array.isArray(bag) ? bag : []) upsertFeeCoin(map, row);
+  }
+
+  const totals = (proxy && proxy.totals) || {};
+  const insights = (proxy && proxy.insights) || {};
+  const swapT = (swap && swap.totals) || {};
+  const claimed =
+    pickSol(totals.shareholderClaimed, swapT.claimed, swapT.claimedSol, insights.distributed) || 0;
+  const unclaimed =
+    pickSol(totals.shareholderUnclaimed, swapT.unclaimed, swapT.unclaimedSol, insights.unclaimed) || 0;
+  const earned =
+    pickSol(totals.shareholderTotalEarned, swapT.earned, swapT.totalEarned) ||
+    claimed + unclaimed;
+
+  return {
+    wallet,
+    claimed,
+    unclaimed,
+    earned,
+    coins: [...map.values()].sort(
+      (a, b) => Number(b.claimed || b.earned || 0) - Number(a.claimed || a.earned || 0)
+    ),
+    source: proxy ? "pump fee API" : swap ? "swap-api" : "",
+  };
+}
+function ratePumpGithubFees(owner, fee) {
+  let score = 42;
+  const notes = [];
+  const org = String((owner && owner.type) || "") === "Organization";
+  const n = (fee && fee.coins && fee.coins.length) || 0;
+  const claimed = Number(fee && fee.claimed) || 0;
+  const unclaimed = Number(fee && fee.unclaimed) || 0;
+
+  if (org) {
+    score -= 20;
+    notes.push("org cannot claim Pump GitHub fees");
+  } else {
+    score += 6;
+    notes.push("individual GitHub user");
+  }
+  if (claimed > 0) {
+    score += 16;
+    notes.push("has claimed on-chain");
+  } else if (unclaimed > 0) {
+    score += 8;
+    notes.push("fees sitting unclaimed");
+  } else {
+    score -= 8;
+    notes.push("no claimed/unclaimed fee book");
+  }
+  if (claimed >= 100) score += 8;
+  else if (claimed >= 10) score += 4;
+  if (n >= 5) notes.push("several linked coins");
+  else if (n >= 1) notes.push("linked coins found");
+
+  score = Math.max(0, Math.min(100, score));
+  const verdict = score >= 75 ? "✅ strong" : score >= 55 ? "⚠️ mixed" : "❌ weak";
+  return { score, verdict, notes };
+}
+
+function pumpGithubFeeBlock(owner, fee, mentionTokens) {
+  const login = owner && owner.login ? owner.login : "";
+  const rated = ratePumpGithubFees(owner, fee);
+  const coins = (fee && fee.coins) || [];
+  const lines = coins.slice(0, 8).map((t, i) => {
+    const paid = t.claimed != null ? t.claimed : t.earned;
+    return (
+      i + 1 + ". <b>" + esc(t.name || "token") +
+      (t.symbol ? " (" + esc(t.symbol) + ")" : "") + "</b>\n" +
+      "<code>" + esc(t.mint) + "</code>\n" +
+      "claimed/paid " + solAmt(paid) +
+      (t.unclaimed != null ? " · unclaimed " + solAmt(t.unclaimed) : "") +
+      (t.shareBps != null ? " · share " + (Number(t.shareBps) / 100).toFixed(1) + "%" : "") +
+      (t.mc ? " · MC " + moneyMkt(t.mc) : "") +
+      "\nhttps://pump.fun/coin/" + esc(t.mint)
+    );
+  });
+
+  const mentionLines = (mentionTokens || []).slice(0, 5).map((t, i) => {
+    return (
+      i + 1 + ". " + esc(t.name || "token") +
+      (t.symbol ? " (" + esc(t.symbol) + ")" : "") +
+      " · MC " + moneyMkt(t.mc) +
+      "\n<code>" + esc(t.mint) + "</code>"
+    );
+  });
+
+  return (
+    "💸 <b>Pump GitHub fees</b> @" + esc(login) + "\n" +
+    "GitHub id " + esc(owner && owner.id != null ? String(owner.id) : "n/a") +
+    " · " + (String((owner && owner.type) || "") === "Organization" ? "ORG" : "user") + "\n" +
+    (fee && fee.wallet ? "Fee PDA/wallet <code>" + esc(fee.wallet) + "</code>\n" : "") +
+    "Claimed " + solAmt(fee && fee.claimed) +
+    " · Unclaimed " + solAmt(fee && fee.unclaimed) +
+    " · Earned " + solAmt(fee && fee.earned) + "\n" +
+    "Tokens in fee book: " + String(coins.length) + "\n" +
+    "🧠 <b>Fee rating " + rated.score + "/100</b> " + esc(rated.verdict) + "\n" +
+    esc(rated.notes.join(" · ") || "fee APIs") +
+    "\n\n<b>Which tokens paid this GitHub</b>\n" +
+    (lines.join("\n\n") || "No claimed/paid fee rows found.") +
+    (mentionLines.length
+      ? "\n\n🔗 <b>Coins that only mention this GitHub</b>\n" +
+        mentionLines.join("\n") +
+        "\n<i>A mention is not a claim.</i>"
+      : "") +
+    "\n<i>Claimed = withdrawn from the GitHub social-fee box. Not GitHub stars. Not proof they made the coin.</i>"
+  );
+}
 async function buildGithubReport(owner, repoName) {
   const userRes = await ghGet("/users/" + encodeURIComponent(owner));
   if (!userRes.ok || !userRes.data || !userRes.data.login) {
@@ -5990,6 +6787,11 @@ async function buildGithubReport(owner, repoName) {
         : "")
     : "";
 
+      const [feeBook, mentionTokens] = await Promise.all([
+    soft(pumpFeeByGithub(ownerData.login, ownerData.id)),
+    soft(searchPumpGithubFeeTokens(ownerData.login)),
+  ]);
+
   return (
     header +
     repoBlock +
@@ -6014,7 +6816,9 @@ async function buildGithubReport(owner, repoName) {
     " " + esc(rated.verdict) +
     "\n" +
     esc(rated.notes.join(" · ") || "public GitHub metadata") +
-    "\n<i>Live GitHub API numbers. Not a source-code clone audit.</i>" +
+       "\n<i>Live GitHub API numbers. Not a source-code clone audit.</i>" +
+    "\n\n" +
+        pumpGithubFeeBlock(ownerData, feeBook, mentionTokens) +
     FOOTER
   ).slice(0, 4000);
 }
@@ -6550,6 +7354,7 @@ const kbArc = (ca) =>
 const kbGh = (id) =>
   new InlineKeyboard()
     .text("🔄 Refresh", "ghref:" + id)
+    .text("💸 Fees", "ghfees:" + id)
     .text("🗑 Delete", "del");
 
 const kbX = (id) =>
@@ -6568,25 +7373,33 @@ const kbSf = (ca) =>
     .text("🗑 Delete", "del");
 
 const WELCOME =
-  "👋 Welcome to <b>VEXLORE</b>\n\n" +
-  "Solana CA → full scan (vamp / bundle / dev / callouts)\n" +
-  "Solana wallet / name.sns / name.sol → Wallet Behaviour Analyser\n" +
-    "Robinhood 0x CA → RH scan only\n" +
-  "Arc 0x CA → /arc 0x…  (or paste 0x; bot auto-picks RH vs Arc)\n" +
-  "GitHub link → repo + owner audit\n" +
-  "X / Twitter post link → likes, views, account rating\n" +
-  "StonkFun / stonks.fun CA or link → pad listing check\n\n" +
-  "/vamp CA\n" +
-  "/bundle CA   <i>Solana only</i>\n" +
-  "/callouts CA   <i>Pump.fun only</i>\n" +
-  "/wallet WALLET or name.sns / name.sol   <i>Solana only</i>\n" +
-   "/rh 0x…\n" +
-  "/arc 0x…\n" +
-  "/stonks CA\n" +
-  "/git owner/repo\n" +
-  "/x https://x.com/user/status/ID\n" +
-  "/lb   → Leaderboard (matches your screenshot)\n" +
-  "/pnl CA → PnL card (matches your screenshot)";
+  "✨ <b>Welcome to VEXLORE</b> ✨\n" +
+  "Cute scanner. Clean calls. Fast reads.\n\n" +
+  "🪄 <b>Easy start</b>\n" +
+  "Just paste a CA, 0x, wallet, GitHub, or X link.\n" +
+  "No command needed.\n\n" +
+  "🟣 <b>Solana</b>\n" +
+  "• paste CA → full scan\n" +
+  "• /vamp CA → OG vs copy\n" +
+  "• /bundle CA → bundles\n" +
+  "• /cluster CA → clusters\n" +
+  "• /dev CA → dev book\n" +
+  "• /callouts CA → Pump.fun comments\n" +
+  "• /wallet name.sol → wallet analyser\n" +
+  "• /stonks CA → pad check\n" +
+  "• /lb → group leaderboard\n" +
+  "• /pnl CA → PnL card\n\n" +
+  "🟠 <b>Other chains</b>\n" +
+  "Paste a 0x and I auto-detect.\n" +
+  "Or pick one:\n" +
+  "/rh  ·  /arc  ·  /eth  ·  /bnb  ·  /base  ·  /hype\n\n" +
+  "💕 <b>Links</b>\n" +
+  "🤖 Bot: <a href=\"https://t.me/VexloreBOT\">t.me/VexloreBOT</a>\n" +
+  "🛟 Support: <a href=\"https://t.me/vexloresupport\">t.me/vexloresupport</a>\n" +
+  "🏠 Community: <a href=\"https://t.me/VEXLORECOMM\">t.me/VEXLORECOMM</a>\n" +
+  "🐦 X: <a href=\"https://x.com/Vexlorebot\">@Vexlorebot</a>\n" +
+  "🌐 Web: <a href=\"https://vexlore.xyz\">vexlore.xyz</a>\n\n" +
+  "❤️ Made by Robin with Love";
 
 bot.command("start", (ctx) =>
   ctx.reply(WELCOME, { parse_mode: "HTML" })
@@ -7439,10 +8252,14 @@ bot.callbackQuery(/^arcdev:(.+)$/, async (ctx) => {
     await ctx.answerCallbackQuery({ text: "failed" });
   }
 });
-
 bot.callbackQuery(/^ghref:(.+)$/, async (ctx) => {
   const job = ghJobs.get(String(ctx.match[1]));
-  if (!job) return ctx.answerCallbackQuery({ text: "Scan expired. Send the link again.", show_alert: true });
+  if (!job) {
+    return ctx.answerCallbackQuery({
+      text: "Scan expired. Send the GitHub link again.",
+      show_alert: true,
+    });
+  }
   await ctx.answerCallbackQuery({ text: "GitHub refresh..." });
   try {
     const text = await buildGithubReport(job.owner, job.repo);
@@ -7456,6 +8273,44 @@ bot.callbackQuery(/^ghref:(.+)$/, async (ctx) => {
   }
 });
 
+bot.callbackQuery(/^ghfees:(.+)$/, async (ctx) => {
+  const job = ghJobs.get(String(ctx.match[1]));
+  if (!job) {
+    return ctx.answerCallbackQuery({
+      text: "Scan expired. Send the GitHub link again.",
+      show_alert: true,
+    });
+  }
+  await ctx.answerCallbackQuery({ text: "Pump GitHub fees..." });
+  try {
+    const userRes = await ghGet("/users/" + encodeURIComponent(job.owner));
+    if (!userRes.ok || !userRes.data || !userRes.data.login) {
+      await ctx.editMessageText("❌ GitHub user not found." + FOOTER, {
+        parse_mode: "HTML",
+      });
+      return;
+    }
+      const [feeBook, mentionTokens] = await Promise.all([
+      pumpFeeByGithub(userRes.data.login, userRes.data.id),
+      searchPumpGithubFeeTokens(userRes.data.login),
+    ]);
+    const text =
+      "👾 <b>Pump GitHub fee scan</b>\n" +
+      "<b>" + esc(userRes.data.login) + "</b>\n" +
+      userRes.data.html_url +
+      "\n\n" +
+      pumpGithubFeeBlock(userRes.data, feeBook, mentionTokens) +
+      "\nUpdated: " + utc(new Date()) +
+      FOOTER;
+    await ctx.editMessageText(text.slice(0, 4000), {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+      reply_markup: kbGh(ctx.match[1]),
+    });
+  } catch (_) {
+    await ctx.answerCallbackQuery({ text: "failed" });
+  }
+});
 bot.callbackQuery(/^xref:(.+)$/, async (ctx) => {
   const job = xJobs.get(String(ctx.match[1]));
   if (!job || !job.postId) return ctx.answerCallbackQuery({ text: "Scan expired. Send the link again.", show_alert: true });
