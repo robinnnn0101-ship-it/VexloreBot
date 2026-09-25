@@ -10,7 +10,9 @@ const X_BEARER = String(process.env.X_BEARER || "")
   .replace(/^["']+|["']+$/g, "");
 const GH_TOKEN = process.env.GITHUB_TOKEN || "";
 const FOOTER = "\n\n❤️ Made by Robin with Love";
-const DATA_FILE = path.join(__dirname, "vexlore-data.json");
+// Prefer Railway volume (or DATA_DIR) so calls survive redeploys.
+const DATA_DIR = process.env.RAILWAY_VOLUME_MOUNT_PATH || process.env.DATA_DIR || __dirname;
+const DATA_FILE = path.join(DATA_DIR, "vexlore-data.json");
 const CALL_DEDUPE_MS = 60 * 60 * 1000;
 const PEAK_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000;
 const ST_CACHE_MS = 75 * 1000;
@@ -417,6 +419,9 @@ let saveTimer = null;
 function saveStore(now = false) {
   const write = () => {
     try {
+      try {
+        fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true });
+      } catch (_) {}
       fs.writeFileSync(
         DATA_FILE,
         JSON.stringify(
@@ -430,7 +435,7 @@ function saveStore(now = false) {
         )
       );
     } catch (e) {
-      console.error("save store fail", e.message || e);
+      console.error("save store fail", e.message || e, DATA_FILE);
     }
   };
   if (now) return write();
@@ -4525,7 +4530,7 @@ async function recordCall(ctx, ca) {
   if (store.calls.length > 8000) {
     store.calls = store.calls.filter((c) => Number(c.calledAt) >= cutoff);
   }
-  saveStore();
+  saveStore(true);
 }
 
 async function updateCallPeaks() {
@@ -4596,7 +4601,7 @@ function buildLeaderboard(chat, periodKey) {
     return (
       "🏆 <b>TokenScan</b>\n" +
       "<b>" + esc(title) + "</b>\n" +
-      "Sol_Mafia [" + period.label + "]\n\n" +
+      "Vexlore winner board · " + period.label + "\n\n" +
       "No calls recorded in this window yet.\n" +
       "Share a CA in the group to start the board." +
       FOOTER
@@ -4651,7 +4656,7 @@ function buildLeaderboard(chat, periodKey) {
   return (
     "🏆 <b>TokenScan</b>\n" +
     "<b>" + esc(title) + "</b>\n" +
-    "Sol_Mafia [" + period.label + "]\n\n" +
+    "Vexlore winner board · " + period.label + "\n\n" +
     "👑 <b>Top Callers</b>\n" +
     callerLines.join("\n") +
     "\n\n" +
