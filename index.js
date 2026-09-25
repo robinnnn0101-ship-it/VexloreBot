@@ -727,6 +727,16 @@ async function dexPair(ca) {
     const best = pickBestPair(next, isSolPair);
     if (best && pairLiq(best) && pairMc(best)) return best;
   }
+  // Fallback: search endpoint (helps when exact mint path is empty / case mismatch)
+  if (!all.length) {
+    const r = await jget("https://api.dexscreener.com/latest/dex/search?q=" + encodeURIComponent(ca));
+    const next = extractPairs(r.data).filter((p) => {
+      if (!isSolPair(p)) return false;
+      const addr = String((p.baseToken && p.baseToken.address) || "");
+      return addr && addr.toLowerCase() === String(ca).toLowerCase();
+    });
+    all = all.concat(next);
+  }
   return pickBestPair(all, isSolPair);
 }
 
@@ -827,9 +837,25 @@ function marketQuote(pump, pair, tokenInfo) {
   const fdv = num(pair && pair.fdv) || stq.fdv || mc;
   const liq = pairLiq(pair) || stq.liq;
   const vol = pairVol(pair) || stq.vol;
+  const stName =
+    (tokenInfo && tokenInfo.token && tokenInfo.token.name) ||
+    (tokenInfo && tokenInfo.name) ||
+    "";
+  const stSym =
+    (tokenInfo && tokenInfo.token && tokenInfo.token.symbol) ||
+    (tokenInfo && tokenInfo.symbol) ||
+    "";
   return {
-    name: (pump && pump.name) || (pair && pair.baseToken && pair.baseToken.name) || "Unknown",
-    symbol: (pump && pump.symbol) || (pair && pair.baseToken && pair.baseToken.symbol) || "?",
+    name:
+      (pump && pump.name) ||
+      (pair && pair.baseToken && pair.baseToken.name) ||
+      stName ||
+      "Unknown",
+    symbol:
+      (pump && pump.symbol) ||
+      (pair && pair.baseToken && pair.baseToken.symbol) ||
+      stSym ||
+      "?",
     price,
     mc,
     fdv,
@@ -3120,9 +3146,25 @@ function ingestStSearchHits(list, map, symbol, name) {
   }
 }
 
-async function findOgFamily(ca, pump, pair) {
-  const name = (pump && pump.name) || (pair && pair.baseToken && pair.baseToken.name) || "";
-  const symbol = (pump && pump.symbol) || (pair && pair.baseToken && pair.baseToken.symbol) || "";
+async function findOgFamily(ca, pump, pair, tokenInfo) {
+  const stName =
+    (tokenInfo && tokenInfo.token && tokenInfo.token.name) ||
+    (tokenInfo && tokenInfo.name) ||
+    "";
+  const stSym =
+    (tokenInfo && tokenInfo.token && tokenInfo.token.symbol) ||
+    (tokenInfo && tokenInfo.symbol) ||
+    "";
+  const name =
+    (pump && pump.name) ||
+    (pair && pair.baseToken && pair.baseToken.name) ||
+    stName ||
+    "";
+  const symbol =
+    (pump && pump.symbol) ||
+    (pair && pair.baseToken && pair.baseToken.symbol) ||
+    stSym ||
+    "";
   const map = new Map();
 
   upsert(map, ca, {
@@ -5733,7 +5775,7 @@ async function buildReport(ca) {
     fetchTokenLocks(ca),
   ]);
 
-  const fam = await findOgFamily(ca, pump, pair);
+  const fam = await findOgFamily(ca, pump, pair, tokenInfo);
   let ogTag = fam.isOg ? "OG" : "VAMP";
   if (fam.all.length <= 1) ogTag = fam.isOg ? "OG" : "UNKNOWN";
 
