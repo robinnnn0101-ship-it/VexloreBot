@@ -814,40 +814,12 @@ function stPoolsQuote(tokenInfo) {
   return { mc, liq, vol, fdv };
 }
 
-function stTokenMeta(tokenInfo) {
-  const t =
-    (tokenInfo && tokenInfo.token && typeof tokenInfo.token === "object" && tokenInfo.token) ||
-    (tokenInfo && typeof tokenInfo === "object" ? tokenInfo : null);
-  if (!t) return { name: "", symbol: "", created: null, url: "" };
-  const pools =
-    (Array.isArray(tokenInfo && tokenInfo.pools) && tokenInfo.pools) ||
-    (Array.isArray(t.pools) && t.pools) ||
-    [];
-  const pool0 = pools[0] || null;
-  const created =
-    toDate(t.createdAt || t.created_at || t.creation && t.creation.created_time) ||
-    toDate(pool0 && (pool0.createdAt || pool0.created_at || pool0.openTime || pool0.open_time)) ||
-    null;
-  const url =
-    (pool0 && (pool0.market && pool0.market.url)) ||
-    (t.pools && t.pools[0] && t.pools[0].url) ||
-    "";
-  return {
-    name: String(t.name || t.tokenName || "").trim(),
-    symbol: String(t.symbol || t.tokenSymbol || "").trim(),
-    created,
-    url: String(url || "").trim(),
-  };
-}
-
 function marketQuote(pump, pair, tokenInfo) {
   const stq = stPoolsQuote(tokenInfo);
-  const stm = stTokenMeta(tokenInfo);
   const price =
     num(pair && pair.priceUsd) ||
     num(pump && pump.usd_price) ||
-    num(tokenInfo && tokenInfo.token && tokenInfo.token.price) ||
-    num(tokenInfo && tokenInfo.price);
+    num(tokenInfo && tokenInfo.token && tokenInfo.token.price);
   const mc =
     pairMc(pair) ||
     num(pump && (pump.usd_market_cap || pump.market_cap)) ||
@@ -856,23 +828,14 @@ function marketQuote(pump, pair, tokenInfo) {
   const liq = pairLiq(pair) || stq.liq;
   const vol = pairVol(pair) || stq.vol;
   return {
-    name:
-      (pump && pump.name) ||
-      (pair && pair.baseToken && pair.baseToken.name) ||
-      stm.name ||
-      "Unknown",
-    symbol:
-      (pump && pump.symbol) ||
-      (pair && pair.baseToken && pair.baseToken.symbol) ||
-      stm.symbol ||
-      "?",
+    name: (pump && pump.name) || (pair && pair.baseToken && pair.baseToken.name) || "Unknown",
+    symbol: (pump && pump.symbol) || (pair && pair.baseToken && pair.baseToken.symbol) || "?",
     price,
     mc,
     fdv,
     liq,
     vol,
-    url: (pair && pair.url) || stm.url || "",
-    created: toDate(pump && pump.created_timestamp) || toDate(pair && pair.pairCreatedAt) || stm.created,
+    url: (pair && pair.url) || "",
   };
 }
 
@@ -3157,29 +3120,17 @@ function ingestStSearchHits(list, map, symbol, name) {
   }
 }
 
-async function findOgFamily(ca, pump, pair, tokenInfo) {
-  const stm = stTokenMeta(tokenInfo);
-  const name =
-    (pump && pump.name) ||
-    (pair && pair.baseToken && pair.baseToken.name) ||
-    stm.name ||
-    "";
-  const symbol =
-    (pump && pump.symbol) ||
-    (pair && pair.baseToken && pair.baseToken.symbol) ||
-    stm.symbol ||
-    "";
+async function findOgFamily(ca, pump, pair) {
+  const name = (pump && pump.name) || (pair && pair.baseToken && pair.baseToken.name) || "";
+  const symbol = (pump && pump.symbol) || (pair && pair.baseToken && pair.baseToken.symbol) || "";
   const map = new Map();
 
   upsert(map, ca, {
     name,
     symbol,
-    created:
-      toDate(pump && pump.created_timestamp) ||
-      toDate(pair && pair.pairCreatedAt) ||
-      stm.created,
-    mc: pairMc(pair) || num(pump && (pump.usd_market_cap || pump.market_cap)) || stPoolsQuote(tokenInfo).mc,
-    url: (pair && pair.url) || stm.url,
+    created: toDate(pump && pump.created_timestamp) || toDate(pair && pair.pairCreatedAt),
+    mc: pairMc(pair) || num(pump && (pump.usd_market_cap || pump.market_cap)),
+    url: pair && pair.url,
     tickerMatch: true,
     nameMatch: true,
   });
@@ -3513,18 +3464,11 @@ function ogLine(fam) {
       ? Math.round((fam.you.created - fam.og.created) / 60000)
       : null;
 
-  const ogName = String(fam.og.name || "").trim();
-  const ogSym = String(fam.og.symbol || "").trim();
-  const ogLabel =
-    ogName || ogSym
-      ? (ogName || "Unknown") + (ogSym ? " (" + ogSym + ")" : "")
-      : "name unknown";
-
   if (fam.isOg) {
     return (
       "🟢 THIS CA IS OG CA\n" +
       "🟢 OG CA: " + fam.og.mint + "\n" +
-      "🟢 OG: " + ogLabel + "\n" +
+      "🟢 OG: " + (fam.og.name || "") + " (" + (fam.og.symbol || "") + ")\n" +
       "🕐 OG time: " + utc(fam.og.created)
     );
   }
@@ -3532,7 +3476,7 @@ function ogLine(fam) {
   return (
     "🟣 THIS CA IS VAMP (not OG)\n" +
     "🟢 OG CA: " + fam.og.mint + "\n" +
-    "🟢 OG: " + ogLabel + "\n" +
+    "🟢 OG: " + (fam.og.name || "") + " (" + (fam.og.symbol || "") + ")\n" +
     "🕐 OG time: " + utc(fam.og.created) + "\n" +
     "🕐 This time: " + utc(fam.you && fam.you.created) +
     (gap && gap > 0 ? "\n⏳ " + gap + " min after OG" : "")
@@ -5789,7 +5733,7 @@ async function buildReport(ca) {
     fetchTokenLocks(ca),
   ]);
 
-  const fam = await findOgFamily(ca, pump, pair, tokenInfo);
+  const fam = await findOgFamily(ca, pump, pair);
   let ogTag = fam.isOg ? "OG" : "VAMP";
   if (fam.all.length <= 1) ogTag = fam.isOg ? "OG" : "UNKNOWN";
 
@@ -5900,7 +5844,7 @@ async function buildReport(ca) {
 
   const launchBody =
     "Pump: " + utc(toDate(pump && pump.created_timestamp)) + "\n" +
-    "Pair: " + utc(toDate(pair && pair.pairCreatedAt) || q.created) + "\n" +
+    "Pair: " + utc(toDate(pair && pair.pairCreatedAt)) + "\n" +
     esc(ogLine(fam));
 
   const bundleBody =
@@ -5943,7 +5887,7 @@ async function buildReport(ca) {
 async function buildVamp(ca) {
   const pump = await pumpCoin(ca);
   const pair = await dexPair(ca);
-  const fam = await findOgFamily(ca, pump, pair, null);
+  const fam = await findOgFamily(ca, pump, pair);
 
   if (!fam.all.length) return "❌ No family found.\n<code>" + esc(ca) + "</code>" + FOOTER;
 
