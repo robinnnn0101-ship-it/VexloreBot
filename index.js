@@ -649,7 +649,123 @@ function sortCalloutRows(rows) {
   });
 }
 
+async function pumpMintCallouts(ca) {
+  if (!isCa(ca) || isEvmCa(ca)) return [];
+  const urls = [
+    "https://frontend-api-v3.pump.fun/mint-positions/" +
+      ca +
+      "?sortBy=TOP&withThesis=true&pageSize=50",
+    "https://frontend-api-v3.pump.fun/mint-positions/" +
+      ca +
+      "?sortBy=RECENT&withThesis=true&pageSize=50",
+    "https://frontend-api-v3.pump.fun/mint-positions/" +
+      ca +
+      "?sortBy=TOP&pageSize=50",
+  ];
+  const out = [];
+  const seen = new Set();
+
+  for (const u of urls) {
+    const r = await jget(u);
+    const list =
+      (r.data && Array.isArray(r.data.positions) && r.data.positions) ||
+      (r.data && Array.isArray(r.data) && r.data) ||
+      [];
+    if (!list.length) continue;
+
+    for (const row of list) {
+      if (!row || typeof row !== "object") continue;
+      const call = row.callout && typeof row.callout === "object" ? row.callout : null;
+      // Prefer real callouts (with thesis / calledOutAtMcap); still keep holders with text if present
+      const text = String(
+        (call && (call.thesis || call.text || call.message || call.comment)) ||
+          row.thesis ||
+          row.text ||
+          row.comment ||
+          ""
+      ).trim();
+      const name = String(
+        row.userName ||
+          row.username ||
+          row.handle ||
+          (row.user && (row.user.username || row.user.name)) ||
+          ""
+      ).trim();
+      const addr = String(
+        row.walletAddress ||
+          row.wallet ||
+          row.address ||
+          row.publicKey ||
+          (row.user && (row.user.address || row.user.wallet)) ||
+          ""
+      ).trim();
+      const when = toDate(
+        (call && (call.calloutTimestamp || call.timestamp || call.createdAt || call.created_at)) ||
+          row.calloutTimestamp ||
+          row.timestamp ||
+          row.createdAt ||
+          row.created_at
+      );
+      const mc =
+        num(call && (call.calledOutAtMcap || call.called_out_at_mcap || call.marketCapUsd || call.market_cap)) ||
+        num(row.calledOutAtMcap) ||
+        null;
+      const valueUsd =
+        num(row.costBasisUsd) ||
+        num(row.amountBoughtUsd) ||
+        num(row.pnlUsd != null && row.costBasisUsd == null ? null : row.costBasisUsd) ||
+        (num(row.amountHeld) && num(row.costBasisUsd)) ||
+        num(row.costBasisUsd) ||
+        null;
+      // holding value approx from cost basis or current pnl+cost
+      const holdUsd =
+        num(row.costBasisUsd) != null && num(row.pnlUsd) != null
+          ? Number(row.costBasisUsd) + Number(row.pnlUsd)
+          : num(row.costBasisUsd);
+
+      let twitter = String(row.xUsername || row.x_username || row.twitter || row.twitterUsername || "").trim();
+      if (twitter) {
+        const m = twitter.match(
+          /(?:(?:https?:\/\/)?(?:www\.)?(?:twitter\.com|x\.com)\/)?@?([A-Za-z0-9_]{1,15})/i
+        );
+        twitter = m ? m[1] : twitter.replace(/^@/, "").replace(/[^A-Za-z0-9_]/g, "").slice(0, 15);
+      }
+
+      // Skip pure silent positions with no callout text and no call object
+      if (!call && !text) continue;
+      if (!name && !addr && !text) continue;
+
+      const key =
+        String((call && call.calloutId) || row.userId || "") +
+        "|" +
+        addr +
+        "|" +
+        (when ? when.getTime() : "") +
+        "|" +
+        text.slice(0, 48);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({
+        name,
+        addr,
+        twitter,
+        text: text || (call ? "<i>callout (no thesis text)</i>" : ""),
+        when,
+        mc,
+        valueUsd: holdUsd != null ? holdUsd : valueUsd,
+      });
+    }
+    if (out.length) break;
+  }
+
+  return sortCalloutRows(out);
+}
+
 async function pumpReplies(ca) {
+  // Pump moved public comments off /replies/{mint}. Prefer mint-positions callouts.
+  const primary = await pumpMintCallouts(ca);
+  if (primary.length) return primary;
+
   if (!isCa(ca) || isEvmCa(ca)) return [];
   const out = [];
   const seen = new Set();
@@ -659,6 +775,7 @@ async function pumpReplies(ca) {
     const urls = [
       "https://frontend-api-v3.pump.fun/replies/" + ca + "?limit=" + limit + "&offset=" + offset + "&reverseOrder=false",
       "https://frontend-api-v3.pump.fun/replies/" + ca + "?limit=" + limit + "&offset=" + offset,
+      "https://frontend-api-v3.pump.fun/api/v1/communities/" + ca + "/replies/public?limit=" + limit + "&offset=" + offset,
     ];
     let list = [];
     for (const u of urls) {
@@ -690,7 +807,7 @@ async function pumpReplies(ca) {
       out.push({
         name,
         addr,
-        twitter,
+        twitter: twitter || "",
         text,
         when,
         mc: replyMc(row),
@@ -704,10 +821,15 @@ async function pumpReplies(ca) {
 }
 
 async function pumpOfficialCallouts(ca) {
+  // Also try mint-positions if replies path is empty
+  const primary = await pumpMintCallouts(ca);
+  if (primary.length) return primary;
+
   if (!isCa(ca) || isEvmCa(ca)) return [];
   const urls = [
     "https://frontend-api-v3.pump.fun/callout/top/" + ca + "?limit=50&sortBy=TIMESTAMP&sortOrder=ASC",
     "https://frontend-api-v3.pump.fun/callouts?mint=" + encodeURIComponent(ca) + "&limit=50&sortBy=TIMESTAMP&sortOrder=ASC",
+    "https://frontend-api-v3.pump.fun/api/v1/communities/" + ca + "/callouts",
     "https://advanced-api-v2.pump.fun/callout/top/" + ca + "?limit=50&sortBy=TIMESTAMP&sortOrder=ASC",
     "https://advanced-api-v2.pump.fun/callout/list/" + ca + "?limit=50&sortBy=TIMESTAMP&sortOrder=ASC",
   ];
@@ -740,7 +862,7 @@ async function pumpOfficialCallouts(ca) {
       out.push({
         name,
         addr,
-        twitter,
+        twitter: twitter || "",
         text,
         when,
         mc: replyMc(row),
@@ -5827,69 +5949,53 @@ async function buildCallouts(ca) {
     return "📣 Pump.fun callouts are Solana / Pump.fun only.\nThis CA is Robinhood Chain." + FOOTER;
   }
 
-  const [pump, pair, comments, official, holdersRaw] = await Promise.all([
-    pumpCoin(ca),
-    dexPair(ca),
-    pumpReplies(ca),
-    pumpOfficialCallouts(ca),
-    soft(st("/tokens/" + ca + "/holders?enrich=all")),
+  const [pump, pair, callouts] = await Promise.all([
+    soft(pumpCoin(ca)),
+    soft(dexPair(ca)),
+    soft(pumpMintCallouts(ca)),
   ]);
 
-  const q = marketQuote(pump, pair, null);
-  const rows = comments.length ? comments : official;
-  const source = comments.length
-    ? "Pump.fun comments"
-    : official.length
-    ? "official Pump.fun callouts"
-    : "none";
+  let rows = Array.isArray(callouts) ? callouts : [];
+  let source = rows.length ? "Pump.fun callouts (mint positions)" : "none";
 
-  const holderMap = new Map();
-  const parsedHolders = parseHolders(holdersRaw, null);
-  for (const h of parsedHolders.list || []) {
-    const w = String(h.wallet || h.address || "").trim();
-    if (!w) continue;
-    holderMap.set(w, h);
-    holderMap.set(w.toLowerCase(), h);
+  // Fallback to legacy reply scrapers if mint-positions empty
+  if (!rows.length) {
+    const [comments, official] = await Promise.all([
+      soft(pumpReplies(ca)),
+      soft(pumpOfficialCallouts(ca)),
+    ]);
+    if (comments && comments.length) {
+      rows = comments;
+      source = "Pump.fun comments";
+    } else if (official && official.length) {
+      rows = official;
+      source = "official Pump.fun callouts";
+    }
   }
 
+  const q = marketQuote(pump, pair, null);
+
   const lines = rows.slice(0, 15).map((c, i) => {
-    const who = c.name ? "@" + c.name.replace(/^@/, "") : "anon";
+    const who = c.name ? "@" + String(c.name).replace(/^@/, "") : "anon";
     let tag = "SHRIMP";
-    const h = c.addr ? holderMap.get(c.addr) || holderMap.get(String(c.addr).toLowerCase()) : null;
-    if (h) tag = sizeTag(h);
-    else if (c.valueUsd != null) tag = walletUsdSize(c.valueUsd);
+    if (c.valueUsd != null) tag = walletUsdSize(c.valueUsd);
     const icon =
-      tag === "LP"
-        ? "💧"
-        : tag === "WHALE"
+      tag === "WHALE"
         ? "🐳"
         : tag === "FISH"
         ? "🐟"
-        : tag === "DEV"
-        ? "👨‍💻"
-        : tag === "BOT"
-        ? "🤖"
         : tag === "CRAB"
         ? "🦀"
+        : tag === "BOT"
+        ? "🤖"
         : "🦐";
-    let tw = c.twitter || "";
-    if (!tw && h && h.identity) {
-      const id = h.identity;
-      const raw =
-        id.twitter ||
-        id.twitter_username ||
-        id.twitterUsername ||
-        id.x ||
-        id.x_username ||
-        (id.socials && (id.socials.twitter || id.socials.x)) ||
-        "";
-      if (raw) {
-        const m = String(raw).match(
-          /(?:(?:https?:\/\/)?(?:www\.)?(?:twitter\.com|x\.com)\/)?@?([A-Za-z0-9_]{1,15})/i
-        );
-        tw = m ? m[1] : String(raw).replace(/^@/, "").replace(/[^A-Za-z0-9_]/g, "").slice(0, 15);
-      }
-    }
+    const tw = c.twitter ? String(c.twitter).replace(/^@/, "") : "";
+    const textLine =
+      c.text && String(c.text).startsWith("<i>")
+        ? c.text
+        : c.text
+        ? esc(String(c.text).slice(0, 240))
+        : "<i>no comment text</i>";
     return (
       i +
       1 +
@@ -5906,7 +6012,7 @@ async function buildCallouts(ca) {
       utc(c.when) +
       (c.mc != null ? " · called @ MC " + moneyMkt(c.mc) : "") +
       "\n" +
-      (c.text ? esc(c.text.slice(0, 240)) : "<i>no comment text</i>")
+      textLine
     );
   });
 
@@ -5926,7 +6032,8 @@ async function buildCallouts(ca) {
     "Count: " +
     rows.length +
     " · order: first posted → last\n\n" +
-    (lines.join("\n\n") || "No Pump.fun callouts / comments found for this CA.") +
+    (lines.join("\n\n") ||
+      "No Pump.fun callouts found for this CA.\n(Only tokens with on-platform callouts/thesis show here.)") +
     FOOTER
   ).slice(0, 4000);
 }
