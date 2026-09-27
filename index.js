@@ -516,9 +516,13 @@ function replyWhen(row) {
 }
 
 function replyUser(row) {
-  if (!row || typeof row !== "object") return { name: "", addr: "" };
+  if (!row || typeof row !== "object") return { name: "", addr: "", twitter: "" };
   const u = row.user && typeof row.user === "object" ? row.user : null;
   const caller = row.caller && typeof row.caller === "object" ? row.caller : null;
+  const profile =
+    (row.profile && typeof row.profile === "object" && row.profile) ||
+    (u && u.profile && typeof u.profile === "object" && u.profile) ||
+    null;
   const addr = String(
     (typeof row.user === "string" && row.user) ||
       row.address ||
@@ -541,7 +545,43 @@ function replyUser(row) {
       row.name ||
       ""
   ).trim();
-  return { name, addr };
+  const rawTw = String(
+    row.twitter ||
+      row.twitter_username ||
+      row.twitterUsername ||
+      row.twitter_handle ||
+      row.x ||
+      row.x_username ||
+      row.xUsername ||
+      (u &&
+        (u.twitter ||
+          u.twitter_username ||
+          u.twitterUsername ||
+          u.twitter_handle ||
+          u.x ||
+          u.x_username ||
+          u.xUsername)) ||
+      (caller &&
+        (caller.twitter ||
+          caller.twitter_username ||
+          caller.twitterUsername ||
+          caller.twitter_handle ||
+          caller.x ||
+          caller.x_username)) ||
+      (profile &&
+        (profile.twitter ||
+          profile.twitter_username ||
+          profile.twitterUsername ||
+          profile.x ||
+          profile.x_username)) ||
+      ""
+  ).trim();
+  let twitter = "";
+  if (rawTw) {
+    const m = rawTw.match(/(?:(?:https?:\/\/)?(?:www\.)?(?:twitter\.com|x\.com)\/)?@?([A-Za-z0-9_]{1,15})/i);
+    twitter = m ? m[1] : rawTw.replace(/^@/, "").replace(/[^A-Za-z0-9_]/g, "").slice(0, 15);
+  }
+  return { name, addr, twitter };
 }
 
 function replyText(row) {
@@ -556,6 +596,49 @@ function replyText(row) {
       (row.callout && (row.callout.text || row.callout.message || row.callout.comment)) ||
       ""
   ).trim();
+}
+
+function replyMc(row) {
+  if (!row || typeof row !== "object") return null;
+  const nested = row.callout && typeof row.callout === "object" ? row.callout : null;
+  const coin =
+    (row.coin && typeof row.coin === "object" ? row.coin : null) ||
+    (row.token && typeof row.token === "object" ? row.token : null);
+  return (
+    num(row.marketCapUsd) ||
+    num(row.market_cap_usd) ||
+    num(row.usd_market_cap) ||
+    num(row.marketCap) ||
+    num(row.market_cap) ||
+    num(row.mcap) ||
+    num(row.fdv) ||
+    num(
+      nested &&
+        (nested.marketCapUsd ||
+          nested.market_cap_usd ||
+          nested.usd_market_cap ||
+          nested.marketCap ||
+          nested.market_cap)
+    ) ||
+    num(coin && (coin.marketCapUsd || coin.usd_market_cap || coin.market_cap || coin.marketCap)) ||
+    null
+  );
+}
+
+function replyPositionUsd(row) {
+  if (!row || typeof row !== "object") return null;
+  const p =
+    (row.position && typeof row.position === "object" && row.position) ||
+    (row.holding && typeof row.holding === "object" && row.holding) ||
+    (row.caller && typeof row.caller === "object" && row.caller.position) ||
+    null;
+  return (
+    num(p && (p.valueUsd || p.value_usd || p.usd || p.holdingValueUsd)) ||
+    num(row.valueUsd) ||
+    num(row.holding_value_usd) ||
+    num(row.position_value_usd) ||
+    null
+  );
 }
 
 function sortCalloutRows(rows) {
@@ -590,7 +673,7 @@ async function pumpReplies(ca) {
 
     for (const row of list) {
       if (!row || typeof row !== "object") continue;
-      const { name, addr } = replyUser(row);
+      const { name, addr, twitter } = replyUser(row);
       const text = replyText(row);
       const when = replyWhen(row);
       if (!name && !addr && !text) continue;
@@ -604,7 +687,15 @@ async function pumpReplies(ca) {
         text.slice(0, 48);
       if (seen.has(key)) continue;
       seen.add(key);
-      out.push({ name, addr, text, when });
+      out.push({
+        name,
+        addr,
+        twitter,
+        text,
+        when,
+        mc: replyMc(row),
+        valueUsd: replyPositionUsd(row),
+      });
     }
     if (list.length < limit) break;
   }
@@ -639,14 +730,22 @@ async function pumpOfficialCallouts(ca) {
           ca
       );
       if (mint && String(mint) !== String(ca)) continue;
-      const { name, addr } = replyUser(row);
+      const { name, addr, twitter } = replyUser(row);
       const text = replyText(row);
       const when = replyWhen(row);
       if (!name && !addr && !text) continue;
       const key = (addr || name) + "|" + (when ? when.getTime() : "") + "|" + text.slice(0, 48);
       if (seen.has(key)) continue;
       seen.add(key);
-      out.push({ name, addr, text, when });
+      out.push({
+        name,
+        addr,
+        twitter,
+        text,
+        when,
+        mc: replyMc(row),
+        valueUsd: replyPositionUsd(row),
+      });
     }
     if (out.length) break;
   }
@@ -5728,11 +5827,12 @@ async function buildCallouts(ca) {
     return "📣 Pump.fun callouts are Solana / Pump.fun only.\nThis CA is Robinhood Chain." + FOOTER;
   }
 
-  const [pump, pair, comments, official] = await Promise.all([
+  const [pump, pair, comments, official, holdersRaw] = await Promise.all([
     pumpCoin(ca),
     dexPair(ca),
     pumpReplies(ca),
     pumpOfficialCallouts(ca),
+    soft(st("/tokens/" + ca + "/holders?enrich=all")),
   ]);
 
   const q = marketQuote(pump, pair, null);
@@ -5743,22 +5843,89 @@ async function buildCallouts(ca) {
     ? "official Pump.fun callouts"
     : "none";
 
-  const lines = rows.slice(0, 18).map((c, i) => {
+  const holderMap = new Map();
+  const parsedHolders = parseHolders(holdersRaw, null);
+  for (const h of parsedHolders.list || []) {
+    const w = String(h.wallet || h.address || "").trim();
+    if (!w) continue;
+    holderMap.set(w, h);
+    holderMap.set(w.toLowerCase(), h);
+  }
+
+  const lines = rows.slice(0, 15).map((c, i) => {
     const who = c.name ? "@" + c.name.replace(/^@/, "") : "anon";
+    let tag = "SHRIMP";
+    const h = c.addr ? holderMap.get(c.addr) || holderMap.get(String(c.addr).toLowerCase()) : null;
+    if (h) tag = sizeTag(h);
+    else if (c.valueUsd != null) tag = walletUsdSize(c.valueUsd);
+    const icon =
+      tag === "LP"
+        ? "💧"
+        : tag === "WHALE"
+        ? "🐳"
+        : tag === "FISH"
+        ? "🐟"
+        : tag === "DEV"
+        ? "👨‍💻"
+        : tag === "BOT"
+        ? "🤖"
+        : tag === "CRAB"
+        ? "🦀"
+        : "🦐";
+    let tw = c.twitter || "";
+    if (!tw && h && h.identity) {
+      const id = h.identity;
+      const raw =
+        id.twitter ||
+        id.twitter_username ||
+        id.twitterUsername ||
+        id.x ||
+        id.x_username ||
+        (id.socials && (id.socials.twitter || id.socials.x)) ||
+        "";
+      if (raw) {
+        const m = String(raw).match(
+          /(?:(?:https?:\/\/)?(?:www\.)?(?:twitter\.com|x\.com)\/)?@?([A-Za-z0-9_]{1,15})/i
+        );
+        tw = m ? m[1] : String(raw).replace(/^@/, "").replace(/[^A-Za-z0-9_]/g, "").slice(0, 15);
+      }
+    }
     return (
-      i + 1 + ". <b>" + esc(who) + "</b>\n" +
+      i +
+      1 +
+      ". " +
+      icon +
+      " " +
+      tag +
+      " <b>" +
+      esc(who) +
+      "</b>\n" +
       (c.addr ? "<code>" + esc(c.addr) + "</code>\n" : "") +
-      "🕐 " + utc(c.when) + "\n" +
+      (tw ? "🐦 @" + esc(tw) + " · https://x.com/" + esc(tw) + "\n" : "") +
+      "🕐 " +
+      utc(c.when) +
+      (c.mc != null ? " · called @ MC " + moneyMkt(c.mc) : "") +
+      "\n" +
       (c.text ? esc(c.text.slice(0, 240)) : "<i>no comment text</i>")
     );
   });
 
   return (
     "📣 <b>Pump.fun callouts</b>\n" +
-    "<b>" + esc(q.name) + " (" + esc(q.symbol) + ")</b>\n" +
-    "<code>" + esc(ca) + "</code>\n\n" +
-    "Source: " + source + "\n" +
-    "Count: " + rows.length + " · order: first posted → last\n\n" +
+    "<b>" +
+    esc(q.name) +
+    " (" +
+    esc(q.symbol) +
+    ")</b>\n" +
+    "<code>" +
+    esc(ca) +
+    "</code>\n\n" +
+    "Source: " +
+    source +
+    "\n" +
+    "Count: " +
+    rows.length +
+    " · order: first posted → last\n\n" +
     (lines.join("\n\n") || "No Pump.fun callouts / comments found for this CA.") +
     FOOTER
   ).slice(0, 4000);
