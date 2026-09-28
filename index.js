@@ -60,6 +60,10 @@ function isSnsName(t) {
   );
 }
 
+function isTrxCa(t) {
+  return /^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(String(t || "").trim());
+}
+
 function extractCa(text) {
   const m = String(text || "").match(/[1-9A-HJ-NP-Za-km-z]{32,44}/);
   return m ? m[0] : "";
@@ -83,6 +87,24 @@ function extractSnsName(text) {
     /\b([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*)\.(sol|sns)\b/i
   );
   return m ? String(m[1] + "." + m[2]).toLowerCase() : "";
+}
+
+function extractTrxCa(text) {
+  const m = String(text || "").match(/\bT[1-9A-HJ-NP-Za-km-z]{33}\b/);
+  return m ? m[0] : "";
+}
+
+function extractWalletChainHint(text) {
+  const raw = String(text || "").toLowerCase();
+  // strip command so "wallet eth" doesn't false-positive
+  const body = raw.replace(/^\/?wallet\b/, " ");
+  if (/\b(trx|tron)\b/.test(body)) return "trx";
+  if (/\b(bnb|bsc|binance)\b/.test(body)) return "bnb";
+  if (/\b(eth|ethereum)\b/.test(body)) return "eth";
+  if (/\b(rh|robinhood)\b/.test(body)) return "rh";
+  if (/\b(arc)\b/.test(body)) return "arc";
+  if (/\b(sol|solana)\b/.test(body)) return "sol";
+  return "";
 }
 
 function extractStonksLink(text) {
@@ -4526,12 +4548,469 @@ async function isSolTokenMint(ca) {
   return false;
 }
 
-async function buildWallet(ca, domain) {
-  if (isEvmCa(ca)) {
-    return "👛 Wallet Behaviour Analyser is Solana only.\n<code>" + esc(ca) + "</code>" + FOOTER;
+
+/* ───────── multi-chain wallet (RH / ETH / BNB / TRX) — /wallet only ───────── */
+
+const WALLET_CHAIN_META = {
+  eth: {
+    label: "Ethereum",
+    native: "ETH",
+    explorer: "https://etherscan.io",
+    bs: "https://eth.blockscout.com/api/v2",
+  },
+  bnb: {
+    label: "BNB Chain",
+    native: "BNB",
+    explorer: "https://bscscan.com",
+    bs: "https://bsc.blockscout.com/api/v2",
+  },
+  rh: {
+    label: "Robinhood Chain",
+    native: "ETH",
+    explorer: RH_EXPLORER,
+    bs: RH_BS,
+  },
+  arc: {
+    label: "Arc Chain",
+    native: "ETH",
+    explorer: ARC_EXPLORER,
+    bs: ARC_BS,
+  },
+};
+
+async function bsWalletAddress(base, addr) {
+  if (!base || !addr) return null;
+  const r = await jget(base + "/addresses/" + addr);
+  return r.ok && r.data ? r.data : null;
+}
+
+async function bsWalletCounters(base, addr) {
+  if (!base || !addr) return null;
+  const r = await jget(base + "/addresses/" + addr + "/counters");
+  return r.ok && r.data ? r.data : null;
+}
+
+async function bsWalletTokenBalances(base, addr) {
+  if (!base || !addr) return [];
+  const out = [];
+  const seen = new Set();
+  let url = base + "/addresses/" + addr + "/token-balances";
+  // some explorers use /tokens
+  for (const tryUrl of [
+    base + "/addresses/" + addr + "/token-balances",
+    base + "/addresses/" + addr + "/tokens?type=ERC-20",
+  ]) {
+    const r = await jget(tryUrl);
+    if (!r.ok || !r.data) continue;
+    const list =
+      (Array.isArray(r.data) && r.data) ||
+      r.data.items ||
+      r.data.token_balances ||
+      r.data.tokens ||
+      [];
+    if (!Array.isArray(list) || !list.length) continue;
+    for (const row of list) {
+      if (!row || typeof row !== "object") continue;
+      const tok = row.token || row;
+      const key = String(
+        (tok && (tok.address_hash || tok.address || tok.hash)) ||
+          row.token_address ||
+          JSON.stringify(row).slice(0, 40)
+      ).toLowerCase();
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      out.push(row);
+    }
+    if (out.length) break;
   }
-  if (!isCa(ca)) {
-    return "Usage: /wallet SOLANA_WALLET   or   name.sns   or   name.sol" + FOOTER;
+  return out;
+}
+
+async function bsWalletTxs(base, addr) {
+  if (!base || !addr) return [];
+  const r = await jget(base + "/addresses/" + addr + "/transactions?filter=to%20%7C%20from");
+  const list = (r.data && (r.data.items || r.data.transactions || r.data.result)) || [];
+  return Array.isArray(list) ? list : [];
+}
+
+function parseBsNativeBalance(info) {
+  if (!info) return null;
+  // Blockscout v2: coin_balance is wei string
+  const wei =
+    info.coin_balance != null
+      ? info.coin_balance
+      : info.balance != null
+      ? info.balance
+      : info.coin_balance_updated_at != null && info.coin_balance
+      ? info.coin_balance
+      : null;
+  if (wei == null || wei === "") return null;
+  const n = Number(wei);
+  if (!Number.isFinite(n)) {
+    // big int as string
+    try {
+      const s = String(wei);
+      if (s.length > 18) {
+        const whole = s.slice(0, -18) || "0";
+        const frac = s.slice(-18).replace(/0+$/, "");
+        const x = Number(whole + (frac ? "." + frac : ""));
+        return Number.isFinite(x) ? x : null;
+      }
+    } catch (_) {}
+    return null;
+  }
+  // if already looks like eth (small number) leave; else treat as wei
+  if (n > 1e12) return n / 1e18;
+  return n;
+}
+
+function parseTokenBalanceRow(row) {
+  const tok = (row && (row.token || row)) || {};
+  const name = String(tok.name || row.name || "").trim();
+  const symbol = String(tok.symbol || row.symbol || "").trim();
+  const decimals = Number(tok.decimals != null ? tok.decimals : row.decimals != null ? row.decimals : 18);
+  const raw =
+    row.value != null
+      ? row.value
+      : row.balance != null
+      ? row.balance
+      : tok.value != null
+      ? tok.value
+      : null;
+  let amount = null;
+  if (raw != null && raw !== "") {
+    const s = String(raw);
+    const d = Number.isFinite(decimals) && decimals >= 0 ? decimals : 18;
+    if (/^\d+$/.test(s) && s.length > d) {
+      const whole = s.slice(0, -d) || "0";
+      const frac = s.slice(-d).replace(/0+$/, "");
+      amount = Number(whole + (frac ? "." + frac : ""));
+    } else {
+      const n = Number(s);
+      amount = Number.isFinite(n) ? (n > 1e12 ? n / Math.pow(10, d) : n) : null;
+    }
+  }
+  const usd =
+    num(row.value_usd) ||
+    num(row.token && row.token.exchange_rate && amount != null && Number(row.token.exchange_rate) * amount) ||
+    num(tok.exchange_rate && amount != null && Number(tok.exchange_rate) * amount) ||
+    null;
+  const addr = String(tok.address_hash || tok.address || tok.hash || row.token_address || "").trim();
+  return { name, symbol, amount, usd, addr };
+}
+
+async function detectWalletEvmChain(ca) {
+  if (!isEvmCa(ca)) return "eth";
+  // Prefer RH / Arc when the address is active there
+  const known = await soft(detectEvmChain(ca));
+  if (known === "rh" || known === "arc") return known;
+
+  const [ethInfo, bnbInfo, rhInfo] = await Promise.all([
+    soft(bsWalletAddress(WALLET_CHAIN_META.eth.bs, ca)),
+    soft(bsWalletAddress(WALLET_CHAIN_META.bnb.bs, ca)),
+    soft(bsWalletAddress(WALLET_CHAIN_META.rh.bs, ca)),
+  ]);
+
+  const score = (info) => {
+    if (!info) return 0;
+    const txs = Number(info.transactions_count || info.tx_count || 0) || 0;
+    const bal = parseBsNativeBalance(info);
+    let s = txs;
+    if (bal && bal > 0) s += 5;
+    if (info.is_contract) s += 1;
+    return s;
+  };
+
+  const scores = [
+    { chain: "rh", s: score(rhInfo) },
+    { chain: "eth", s: score(ethInfo) },
+    { chain: "bnb", s: score(bnbInfo) },
+  ].sort((a, b) => b.s - a.s);
+
+  if (scores[0].s > 0) return scores[0].chain;
+  return "eth";
+}
+
+function rateEvmWallet({ txCount, tokenCount, isContract, ageDays, nativeBal }) {
+  const notes = [];
+  let score = 45;
+  if (isContract) {
+    score -= 8;
+    notes.push("contract address");
+  }
+  if (txCount >= 5000) {
+    score += 10;
+    notes.push("very active");
+  } else if (txCount >= 500) {
+    score += 6;
+    notes.push("active wallet");
+  } else if (txCount >= 50) {
+    score += 3;
+    notes.push("some activity");
+  } else if (txCount != null && txCount < 5) {
+    score -= 6;
+    notes.push("almost no txs");
+  }
+  if (tokenCount >= 20) {
+    score += 4;
+    notes.push("many token bags");
+  } else if (tokenCount === 0) {
+    notes.push("no ERC-20 bags indexed");
+  }
+  if (ageDays != null && ageDays >= 365) {
+    score += 6;
+    notes.push("1y+ old");
+  } else if (ageDays != null && ageDays < 14) {
+    score -= 8;
+    notes.push("brand new wallet");
+  }
+  if (nativeBal != null && nativeBal >= 10) {
+    score += 4;
+    notes.push("sized native balance");
+  }
+  score = Math.max(0, Math.min(100, score));
+  const label = score >= 70 ? "✅ active / solid" : score >= 50 ? "⚠️ mixed" : "❌ thin / weak";
+  return { score, label, notes };
+}
+
+async function buildEvmWallet(ca, chain) {
+  const meta = WALLET_CHAIN_META[chain] || WALLET_CHAIN_META.eth;
+  const base = meta.bs;
+  const [info, counters, tokens, txs] = await Promise.all([
+    soft(bsWalletAddress(base, ca)),
+    soft(bsWalletCounters(base, ca)),
+    soft(bsWalletTokenBalances(base, ca)),
+    soft(bsWalletTxs(base, ca)),
+  ]);
+
+  if (!info && !counters && !(tokens && tokens.length) && !(txs && txs.length)) {
+    return (
+      "❌ No " + meta.label + " wallet activity found.\n" +
+      "<code>" + esc(ca) + "</code>\n" +
+      "Try: /wallet eth|bnb|rh " + esc(ca) +
+      FOOTER
+    );
+  }
+
+  const nativeBal = parseBsNativeBalance(info);
+  const txCount =
+    countOrZero(counters && (counters.transactions_count || counters.transactionsCount)) ??
+    countOrZero(info && (info.transactions_count || info.tx_count));
+  const tokenCount =
+    countOrZero(counters && (counters.token_transfers_count || counters.tokenTransfersCount)) ??
+    (Array.isArray(tokens) ? tokens.length : null);
+  const isContract = !!(info && (info.is_contract || info.isContract));
+  const created = toDate(
+    info &&
+      (info.creation_tx_timestamp ||
+        info.created_at ||
+        (info.block && info.block.timestamp) ||
+        info.creation_transaction_hash_timestamp)
+  );
+  const ageDays = created ? (Date.now() - created.getTime()) / 86400000 : null;
+  const name = String((info && (info.name || info.ens_domain_name || info.implementation_name)) || "").trim();
+
+  const parsedTokens = (tokens || [])
+    .map(parseTokenBalanceRow)
+    .filter((t) => t && (t.symbol || t.name))
+    .sort((a, b) => (b.usd || 0) - (a.usd || 0) || (b.amount || 0) - (a.amount || 0));
+
+  const topHold = parsedTokens.slice(0, 10).map((t, i) => {
+    return (
+      i + 1 + ". <b>" + esc(t.name || "token") + (t.symbol ? " (" + esc(t.symbol) + ")" : "") + "</b>" +
+      (t.amount != null ? " · " + (t.amount >= 1000 ? t.amount.toFixed(2) : t.amount.toPrecision(4)) : "") +
+      (t.usd != null ? " · " + money(t.usd) : "") +
+      (t.addr ? "\n<code>" + esc(t.addr) + "</code>" : "")
+    );
+  });
+
+  const recentLines = (txs || []).slice(0, 8).map((t) => {
+    const hash = String(t.hash || t.transaction_hash || "").trim();
+    const when = toDate(t.timestamp || t.block_timestamp || t.time);
+    const from = String((t.from && (t.from.hash || t.from)) || t.from_address_hash || t.from || "").toLowerCase();
+    const to = String((t.to && (t.to.hash || t.to)) || t.to_address_hash || t.to || "").toLowerCase();
+    const me = String(ca).toLowerCase();
+    const dir = from === me ? "OUT" : to === me ? "IN" : "TX";
+    const icon = dir === "IN" ? "🟢" : dir === "OUT" ? "🔴" : "⚪";
+    const valWei = t.value != null ? t.value : t.total && t.total.value;
+    let ethVal = null;
+    if (valWei != null) {
+      const n = Number(valWei);
+      if (Number.isFinite(n)) ethVal = n > 1e12 ? n / 1e18 : n;
+    }
+    const status = t.status === "ok" || t.result === "success" ? "" : t.status ? " · " + String(t.status) : "";
+    return (
+      icon + " " + dir +
+      (ethVal != null && ethVal > 0 ? " " + ethVal.toFixed(4) + " " + meta.native : "") +
+      " · " + utc(when) +
+      (hash ? "\n<code>" + esc(short(hash)) + "</code>" : "") +
+      status
+    );
+  });
+
+  const rated = rateEvmWallet({
+    txCount,
+    tokenCount: parsedTokens.length || tokenCount,
+    isContract,
+    ageDays,
+    nativeBal,
+  });
+
+  const sizeTag = walletUsdSize(
+    (nativeBal || 0) * (chain === "bnb" ? 600 : 3000) + // rough native usd proxy for size tag only
+      parsedTokens.reduce((s, t) => s + (t.usd || 0), 0)
+  );
+
+  return (
+    "👛 <b>Wallet Behaviour Analyser</b>\n" +
+    walletSizeIcon(sizeTag) + " " + sizeTag + " · " + rated.label + "\n" +
+    "🔗 <b>" + esc(meta.label) + "</b>\n" +
+    "<code>" + esc(ca) + "</code>\n" +
+    (name ? "🏷 " + esc(name) + "\n" : "") +
+    (isContract ? "⚠️ This is a <b>contract</b> address\n" : "") +
+    "\n💰 <b>On-chain</b>\n" +
+    "Native " + (nativeBal == null ? "n/a" : nativeBal.toFixed(6) + " " + meta.native) + "\n" +
+    "Tx count " + (txCount == null ? "n/a" : String(txCount)) +
+    " · ERC-20 bags " + String(parsedTokens.length || tokenCount || 0) + "\n" +
+    (created ? "🕐 First seen " + utc(created) + "\n" : "") +
+    "\n🧠 <b>Read " + rated.score + "/100</b>\n" +
+    rated.label + "\n" +
+    esc(rated.notes.join(" · ") || "explorer metadata") +
+    "\n\n📦 <b>Top token holdings</b>\n" +
+    (topHold.join("\n") || "none indexed") +
+    "\n\n📜 <b>Recent txs</b>\n" +
+    (recentLines.join("\n") || "none indexed") +
+    "\n\n" +
+    meta.explorer + "/address/" + ca +
+    FOOTER
+  ).slice(0, 4000);
+}
+
+async function buildTrxWallet(ca) {
+  if (!isTrxCa(ca)) {
+    return "Usage: /wallet trx T…   (Tron address)" + FOOTER;
+  }
+  const [acct, txs] = await Promise.all([
+    soft(jget("https://apilist.tronscanapi.com/api/accountv2?address=" + encodeURIComponent(ca))),
+    soft(jget("https://apilist.tronscanapi.com/api/transaction?sort=-timestamp&count=true&limit=10&start=0&address=" + encodeURIComponent(ca))),
+  ]);
+
+  const d = (acct && acct.ok && acct.data) || null;
+  if (!d && !(txs && txs.ok && txs.data)) {
+    return (
+      "❌ No Tron wallet found.\n" +
+      "<code>" + esc(ca) + "</code>\n" +
+      "https://tronscan.org/#/address/" + ca +
+      FOOTER
+    );
+  }
+
+  const trxBal =
+    num(d && d.balance != null ? Number(d.balance) / 1e6 : null) ||
+    num(d && d.totalBalance != null ? Number(d.totalBalance) / 1e6 : null);
+  const txCount = countOrZero(d && (d.totalTransactionCount || d.transactionCount));
+  const tokenCount = Array.isArray(d && d.withPriceTokens) ? d.withPriceTokens.length : null;
+  const created = toDate(d && (d.date_created || d.dateCreated || d.createTime));
+  const ageDays = created ? (Date.now() - created.getTime()) / 86400000 : null;
+  const name = String((d && (d.name || d.account_name || d.addressTag)) || "").trim();
+
+  const tokenRows = Array.isArray(d && d.withPriceTokens) ? d.withPriceTokens : [];
+  const topHold = tokenRows
+    .slice()
+    .sort((a, b) => Number(b.amount_in_usd || b.tokenPriceInUsd || 0) - Number(a.amount_in_usd || a.tokenPriceInUsd || 0))
+    .slice(0, 10)
+    .map((t, i) => {
+      const sym = String(t.tokenAbbr || t.tokenName || t.symbol || "").trim();
+      const nm = String(t.tokenName || t.tokenAbbr || "").trim();
+      const bal = t.balance != null ? Number(t.balance) / Math.pow(10, Number(t.tokenDecimal || t.tokenDecimal || 6) || 6) : null;
+      const usd = num(t.amount_in_usd);
+      return (
+        i + 1 + ". <b>" + esc(nm || "token") + (sym ? " (" + esc(sym) + ")" : "") + "</b>" +
+        (bal != null && Number.isFinite(bal) ? " · " + (bal >= 1000 ? bal.toFixed(2) : bal.toPrecision(4)) : "") +
+        (usd != null ? " · " + money(usd) : "")
+      );
+    });
+
+  const txList =
+    (txs && txs.data && (Array.isArray(txs.data.data) ? txs.data.data : Array.isArray(txs.data) ? txs.data : [])) ||
+    [];
+  const recentLines = txList.slice(0, 8).map((t) => {
+    const hash = String(t.hash || t.txID || "").trim();
+    const when = toDate(t.timestamp || t.block_timestamp);
+    const from = String(t.ownerAddress || t.from || "").trim();
+    const to = String(t.toAddress || t.to || "").trim();
+    const dir = from === ca ? "OUT" : to === ca ? "IN" : "TX";
+    const icon = dir === "IN" ? "🟢" : dir === "OUT" ? "🔴" : "⚪";
+    const contract = String(t.contractType || t.contract_type || t.trigger_info && t.trigger_info.methodName || "").trim();
+    return (
+      icon + " " + dir +
+      (contract ? " · " + esc(contract) : "") +
+      " · " + utc(when) +
+      (hash ? "\n<code>" + esc(short(hash)) + "</code>" : "")
+    );
+  });
+
+  const rated = rateEvmWallet({
+    txCount,
+    tokenCount: tokenRows.length || tokenCount,
+    isContract: !!(d && d.address && d.address.isContract),
+    ageDays,
+    nativeBal: trxBal,
+  });
+  const sizeTag = walletUsdSize((trxBal || 0) * 0.12 + tokenRows.reduce((s, t) => s + (Number(t.amount_in_usd) || 0), 0));
+
+  return (
+    "👛 <b>Wallet Behaviour Analyser</b>\n" +
+    walletSizeIcon(sizeTag) + " " + sizeTag + " · " + rated.label + "\n" +
+    "🔗 <b>Tron</b>\n" +
+    "<code>" + esc(ca) + "</code>\n" +
+    (name ? "🏷 " + esc(name) + "\n" : "") +
+    "\n💰 <b>On-chain</b>\n" +
+    "Native " + (trxBal == null ? "n/a" : trxBal.toFixed(4) + " TRX") + "\n" +
+    "Tx count " + (txCount == null ? "n/a" : String(txCount)) +
+    " · TRC bags " + String(tokenRows.length || tokenCount || 0) + "\n" +
+    (created ? "🕐 First seen " + utc(created) + "\n" : "") +
+    "\n🧠 <b>Read " + rated.score + "/100</b>\n" +
+    rated.label + "\n" +
+    esc(rated.notes.join(" · ") || "Tronscan metadata") +
+    "\n\n📦 <b>Top token holdings</b>\n" +
+    (topHold.join("\n") || "none indexed") +
+    "\n\n📜 <b>Recent txs</b>\n" +
+    (recentLines.join("\n") || "none indexed") +
+    "\n\nhttps://tronscan.org/#/address/" + ca +
+    FOOTER
+  ).slice(0, 4000);
+}
+
+async function buildWallet(ca, domain, chainHint) {
+  const hint = String(chainHint || "").toLowerCase();
+
+  // TRX path
+  if (hint === "trx" || isTrxCa(ca)) {
+    const addr = isTrxCa(ca) ? ca : extractTrxCa(String(ca));
+    if (!isTrxCa(addr)) {
+      return "Usage: /wallet trx T…\n<code>" + esc(ca) + "</code>" + FOOTER;
+    }
+    return buildTrxWallet(addr);
+  }
+
+  // EVM paths: eth / bnb / rh / arc
+  if (isEvmCa(ca) || ["eth", "bnb", "rh", "arc"].includes(hint)) {
+    if (!isEvmCa(ca)) {
+      return "Usage: /wallet eth|bnb|rh 0x…\n<code>" + esc(ca) + "</code>" + FOOTER;
+    }
+    let chain = ["eth", "bnb", "rh", "arc"].includes(hint) ? hint : "";
+    if (!chain) chain = await detectWalletEvmChain(ca);
+    return buildEvmWallet(ca, chain);
+  }
+
+  if (!isCa(ca) || isEvmCa(ca)) {
+    return (
+      "Usage: /wallet SOLANA_WALLET | name.sns | name.sol\n" +
+      "   or  /wallet eth|bnb|rh 0x…\n" +
+      "   or  /wallet trx T…" +
+      FOOTER
+    );
   }
 
   const [profile, follows, fomo, pnl, positions, trades, port] = await Promise.all([
@@ -7683,10 +8162,13 @@ const kbX = (id) =>
     .text("🔄 Refresh", "xref:" + id)
     .text("🗑 Delete", "del");
 
-const kbWallet = (ca) =>
-  new InlineKeyboard()
-    .text("🔄 Refresh", "wref:" + ca)
+const kbWallet = (ca, chain) => {
+  const ch = String(chain || "sol").toLowerCase();
+  const key = ch && ch !== "sol" ? ch + ":" + ca : ca;
+  return new InlineKeyboard()
+    .text("🔄 Refresh", "wref:" + key)
     .text("🗑 Delete", "del");
+};
 
 const kbSf = (ca) =>
   new InlineKeyboard()
@@ -7866,15 +8348,15 @@ async function replyXScan(ctx, postId, loading, linkHandle) {
   }
 }
 
-async function replyWalletScan(ctx, ca, loading, domain) {
+async function replyWalletScan(ctx, ca, loading, domain, chain) {
   const msg = await ctx.reply(loading);
   rememberOwner(ctx.chat.id, msg.message_id, ctx.from && ctx.from.id);
   try {
-    const text = await buildWallet(ca, domain);
+    const text = await buildWallet(ca, domain, chain);
     await ctx.api.editMessageText(ctx.chat.id, msg.message_id, text, {
       parse_mode: "HTML",
       link_preview_options: { is_disabled: true },
-      reply_markup: kbWallet(ca),
+      reply_markup: kbWallet(ca, chain),
     });
   } catch (e) {
     await ctx.api.editMessageText(ctx.chat.id, msg.message_id, "Error: " + (e.message || "fail"));
@@ -8100,19 +8582,51 @@ bot.command("dev", async (ctx) => {
 
 bot.command("wallet", async (ctx) => {
   const raw = ctx.match || ctx.message.text;
-  const hit = extractAnyCa(raw);
-  if (hit.chain === "rh") return ctx.reply("👛 Wallet Behaviour Analyser is Solana only.\nUsage: /wallet SOLANA_WALLET or name.sns / name.sol");
-  if (hit.ca && isCa(hit.ca)) {
+  const hint = extractWalletChainHint(raw);
+  const usage =
+    "Usage: /wallet SOLANA_WALLET | name.sns | name.sol\n" +
+    "   or  /wallet eth|bnb|rh 0x…\n" +
+    "   or  /wallet trx T…";
+
+  // Tron
+  const trx = extractTrxCa(raw);
+  if (hint === "trx" || isTrxCa(trx)) {
+    if (!isTrxCa(trx)) return ctx.reply(usage);
     touchGroup(ctx.chat);
-    await replyWalletScan(ctx, hit.ca, "👛 Wallet Behaviour Analyser...");
+    await replyWalletScan(ctx, trx, "👛 Tron wallet...", "", "trx");
     return;
   }
+
+  // EVM
+  const evm = extractEvmCa(raw);
+  if (isEvmCa(evm) || ["eth", "bnb", "rh", "arc"].includes(hint)) {
+    if (!isEvmCa(evm)) return ctx.reply(usage);
+    touchGroup(ctx.chat);
+    let chain = ["eth", "bnb", "rh", "arc"].includes(hint) ? hint : "";
+    if (!chain) chain = await detectWalletEvmChain(evm);
+    const label =
+      chain === "rh" ? "Robinhood Chain" :
+      chain === "bnb" ? "BNB Chain" :
+      chain === "arc" ? "Arc Chain" : "Ethereum";
+    await replyWalletScan(ctx, evm, "👛 " + label + " wallet...", "", chain);
+    return;
+  }
+
+  // Solana CA
+  const hit = extractAnyCa(raw);
+  if (hit.ca && isCa(hit.ca) && !isEvmCa(hit.ca)) {
+    touchGroup(ctx.chat);
+    await replyWalletScan(ctx, hit.ca, "👛 Wallet Behaviour Analyser...", "", "sol");
+    return;
+  }
+
+  // SNS
   const domain = extractSnsName(raw);
-  if (!domain) return ctx.reply("Usage: /wallet SOLANA_WALLET   or   name.sns   or   name.sol");
+  if (!domain) return ctx.reply(usage);
   touchGroup(ctx.chat);
   const resolved = await resolveSnsDomain(domain);
   if (!resolved) return ctx.reply("❌ Could not resolve " + domain + " to a Solana wallet.");
-  await replyWalletScan(ctx, resolved, "👛 Resolving " + domain + "...", domain);
+  await replyWalletScan(ctx, resolved, "👛 Resolving " + domain + "...", domain, "sol");
 });
 
 bot.command("stonks", async (ctx) => {
@@ -8388,15 +8902,21 @@ bot.callbackQuery(/^watch:(.+)$/, async (ctx) => {
 });
 
 bot.callbackQuery(/^wref:(.+)$/, async (ctx) => {
-  const ca = ctx.match[1];
-  if (isEvmCa(ca)) return ctx.answerCallbackQuery({ text: "Wallet scan is Solana only" });
+  const raw = String(ctx.match[1] || "");
+  let chain = "sol";
+  let ca = raw;
+  const m = raw.match(/^(eth|bnb|rh|trx|sol|arc):(.+)$/i);
+  if (m) {
+    chain = m[1].toLowerCase();
+    ca = m[2];
+  }
   await ctx.answerCallbackQuery({ text: "Wallet refresh..." });
   try {
-    const text = await buildWallet(ca);
+    const text = await buildWallet(ca, "", chain);
     await ctx.editMessageText(text + "\nUpdated: " + utc(new Date()), {
       parse_mode: "HTML",
       link_preview_options: { is_disabled: true },
-      reply_markup: kbWallet(ca),
+      reply_markup: kbWallet(ca, chain),
     });
   } catch (_) {
     await ctx.answerCallbackQuery({ text: "failed" });
