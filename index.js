@@ -4700,35 +4700,88 @@ function parseTokenBalanceRow(row) {
 }
 
 async function detectWalletEvmChain(ca) {
-  if (!isEvmCa(ca)) return "eth";
-  // Prefer RH / Arc when the address is active there
-  const known = await soft(detectEvmChain(ca));
-  if (known === "rh" || known === "arc") return known;
+  if (!isEvmCa(ca)) return { chain: "eth", scores: {}, ambiguous: false };
 
-  const [ethInfo, bnbInfo, rhInfo] = await Promise.all([
-    soft(bsWalletAddress(WALLET_CHAIN_META.eth.bs, ca)),
-    soft(bsWalletAddress(WALLET_CHAIN_META.bnb.bs, ca)),
-    soft(bsWalletAddress(WALLET_CHAIN_META.rh.bs, ca)),
-  ]);
+  // Wallet detection MUST NOT use token/pair detectEvmChain (that mixes token CAs with wallets).
+  // Score pure address activity on each explorer independently.
+  const chains = ["bnb", "eth", "rh", "arc"];
+  const infos = await Promise.all(
+    chains.map((c) => soft(bsWalletAddress(WALLET_CHAIN_META[c].bs, ca)))
+  );
 
-  const score = (info) => {
-    if (!info) return 0;
-    const txs = Number(info.transactions_count || info.tx_count || 0) || 0;
+  const scoreOf = (info) => {
+    if (!info || typeof info !== "object") return 0;
+    const txs =
+      Number(info.transactions_count ?? info.tx_count ?? info.transactionsCount ?? 0) || 0;
+    const transfers =
+      Number(
+        info.token_transfers_count ??
+          info.tokenTransfersCount ??
+          info.token_transfer_count ??
+          0
+      ) || 0;
     const bal = parseBsNativeBalance(info);
-    let s = txs;
-    if (bal && bal > 0) s += 5;
-    if (info.is_contract) s += 1;
+    let s = 0;
+    // Real activity only — empty explorer stubs score 0
+    if (txs > 0) s += Math.min(txs, 5000);
+    if (transfers > 0) s += Math.min(transfers, 500);
+    if (bal != null && bal > 0) s += 25;
+    // Tiny bump if the explorer actually knows the address (hash present) AND has any activity signal
+    if (s > 0 && (info.hash || info.address_hash || info.address)) s += 1;
     return s;
   };
 
-  const scores = [
-    { chain: "rh", s: score(rhInfo) },
-    { chain: "eth", s: score(ethInfo) },
-    { chain: "bnb", s: score(bnbInfo) },
-  ].sort((a, b) => b.s - a.s);
+  const scored = chains.map((c, i) => ({ chain: c, s: scoreOf(infos[i]) }));
+  scored.sort((a, b) => b.s - a.s);
 
-  if (scores[0].s > 0) return scores[0].chain;
-  return "eth";
+  const map = {};
+  for (const row of scored) map[row.chain] = row.s;
+
+  const best = scored[0];
+  const second = scored[1];
+
+  // No activity anywhere → ambiguous (caller should ask user to pick chain)
+  if (!best || best.s <= 0) {
+    return { chain: "", scores: map, ambiguous: true };
+  }
+
+  // Clear winner
+  if (!second || best.s > second.s) {
+    return { chain: best.chain, scores: map, ambiguous: false };
+  }
+
+  // Tie for first → ambiguous
+  return { chain: "", scores: map, ambiguous: true };
+}
+
+function walletAmbiguousMessage(ca, scores) {
+  const lines = ["bnb", "eth", "rh", "arc"].map((c) => {
+    const n = scores && scores[c] != null ? scores[c] : 0;
+    const label = (WALLET_CHAIN_META[c] && WALLET_CHAIN_META[c].label) || c;
+    return "· " + label + " activity " + (n > 0 ? String(n) : "0");
+  });
+  return (
+    "👛 <b>Which chain?</b>\n" +
+    "<code>" +
+    esc(ca) +
+    "</code>\n\n" +
+    "Could not auto-pick a chain for this address.\n" +
+    lines.join("\n") +
+    "\n\nUse one of:\n" +
+    "<code>/wallet bnb " +
+    esc(ca) +
+    "</code>\n" +
+    "<code>/wallet eth " +
+    esc(ca) +
+    "</code>\n" +
+    "<code>/wallet rh " +
+    esc(ca) +
+    "</code>\n" +
+    "<code>/wallet arc " +
+    esc(ca) +
+    "</code>" +
+    FOOTER
+  );
 }
 
 function rateEvmWallet({ txCount, tokenCount, isContract, ageDays, nativeBal }) {
@@ -4785,9 +4838,28 @@ async function buildEvmWallet(ca, chain) {
 
   if (!info && !counters && !(tokens && tokens.length) && !(txs && txs.length)) {
     return (
-      "❌ No " + meta.label + " wallet activity found.\n" +
-      "<code>" + esc(ca) + "</code>\n" +
-      "Try: /wallet eth|bnb|rh " + esc(ca) +
+      "❌ No activity on <b>" +
+      esc(meta.label) +
+      "</b>.\n" +
+      "<code>" +
+      esc(ca) +
+      "</code>\n\n" +
+      "This scan stayed on " +
+      esc(meta.label) +
+      " only (no chain mix-up).\n" +
+      "Try another chain:\n" +
+      "<code>/wallet bnb " +
+      esc(ca) +
+      "</code>\n" +
+      "<code>/wallet eth " +
+      esc(ca) +
+      "</code>\n" +
+      "<code>/wallet rh " +
+      esc(ca) +
+      "</code>\n" +
+      "<code>/wallet arc " +
+      esc(ca) +
+      "</code>" +
       FOOTER
     );
   }
@@ -4994,14 +5066,21 @@ async function buildWallet(ca, domain, chainHint) {
     return buildTrxWallet(addr);
   }
 
-  // EVM paths: eth / bnb / rh / arc
+  // EVM paths: eth / bnb / rh / arc  (hint always wins — never mix chains)
   if (isEvmCa(ca) || ["eth", "bnb", "rh", "arc"].includes(hint)) {
     if (!isEvmCa(ca)) {
-      return "Usage: /wallet eth|bnb|rh 0x…\n<code>" + esc(ca) + "</code>" + FOOTER;
+      return (
+        "Usage: /wallet eth|bnb|rh|arc 0x…\n<code>" + esc(ca) + "</code>" + FOOTER
+      );
     }
-    let chain = ["eth", "bnb", "rh", "arc"].includes(hint) ? hint : "";
-    if (!chain) chain = await detectWalletEvmChain(ca);
-    return buildEvmWallet(ca, chain);
+    if (["eth", "bnb", "rh", "arc"].includes(hint)) {
+      return buildEvmWallet(ca, hint);
+    }
+    const det = await detectWalletEvmChain(ca);
+    if (!det || det.ambiguous || !det.chain) {
+      return walletAmbiguousMessage(ca, det && det.scores);
+    }
+    return buildEvmWallet(ca, det.chain);
   }
 
   if (!isCa(ca) || isEvmCa(ca)) {
@@ -8585,8 +8664,9 @@ bot.command("wallet", async (ctx) => {
   const hint = extractWalletChainHint(raw);
   const usage =
     "Usage: /wallet SOLANA_WALLET | name.sns | name.sol\n" +
-    "   or  /wallet eth|bnb|rh 0x…\n" +
-    "   or  /wallet trx T…";
+    "   or  /wallet bnb|eth|rh|arc 0x…\n" +
+    "   or  /wallet trx T…\n" +
+    "Tip: for EVM always prefer chain prefix, e.g. /wallet bnb 0x…";
 
   // Tron
   const trx = extractTrxCa(raw);
@@ -8597,17 +8677,32 @@ bot.command("wallet", async (ctx) => {
     return;
   }
 
-  // EVM
+  // EVM — explicit hint always wins; auto-detect never uses token-pair logic
   const evm = extractEvmCa(raw);
   if (isEvmCa(evm) || ["eth", "bnb", "rh", "arc"].includes(hint)) {
     if (!isEvmCa(evm)) return ctx.reply(usage);
     touchGroup(ctx.chat);
     let chain = ["eth", "bnb", "rh", "arc"].includes(hint) ? hint : "";
-    if (!chain) chain = await detectWalletEvmChain(evm);
+    if (!chain) {
+      const det = await detectWalletEvmChain(evm);
+      if (!det || det.ambiguous || !det.chain) {
+        const msg = await ctx.reply(walletAmbiguousMessage(evm, det && det.scores), {
+          parse_mode: "HTML",
+          link_preview_options: { is_disabled: true },
+        });
+        rememberOwner(ctx.chat.id, msg.message_id, ctx.from && ctx.from.id);
+        return;
+      }
+      chain = det.chain;
+    }
     const label =
-      chain === "rh" ? "Robinhood Chain" :
-      chain === "bnb" ? "BNB Chain" :
-      chain === "arc" ? "Arc Chain" : "Ethereum";
+      chain === "rh"
+        ? "Robinhood Chain"
+        : chain === "bnb"
+        ? "BNB Chain"
+        : chain === "arc"
+        ? "Arc Chain"
+        : "Ethereum";
     await replyWalletScan(ctx, evm, "👛 " + label + " wallet...", "", chain);
     return;
   }
