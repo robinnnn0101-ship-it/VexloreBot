@@ -3745,9 +3745,9 @@ async function xPulse(ca, pump, pair) {
   const officialX = (pump && pump.twitter) || "";
 
   if (!X_BEARER) {
+    // Quiet fallback: show official / community only (set X_BEARER on Railway to rank posts)
     return (
-      "🐦 X: add X_BEARER env to rank first / top / trending posts for this CA\n" +
-      (officialX ? "Official: " + officialX + "\n" : "") +
+      (officialX ? "🐦 Official: " + officialX + "\n" : "🐦 X posts: set X_BEARER on host to rank first / top\n") +
       (comm ? "💬 " + comm : "💬 no community link")
     );
   }
@@ -3821,8 +3821,60 @@ async function xPulse(ca, pump, pair) {
   );
 }
 
-function lore(pump, ogTag, bundlePct, sniperPct, mc) {
+function readTokenStory(pump, name, symbol) {
   const desc = String((pump && pump.description) || "").trim();
+  const n = String(name || (pump && pump.name) || "").trim();
+  const s = String(symbol || (pump && pump.symbol) || "").trim();
+  const blob = (n + " " + s + " " + desc).toLowerCase();
+
+  const themes = [];
+  const rules = [
+    [/\b(ai|artificial|gpt|llm|agent|neural|robot)\b/, "AI / agents"],
+    [/\b(dog|doge|shib|inu|puppy|woof)\b/, "dog meme"],
+    [/\b(cat|kitten|neko|meow)\b/, "cat meme"],
+    [/\b(pepe|frog|kek|wojak)\b/, "frog / classic meme"],
+    [/\b(trump|maga|politic|election|biden)\b/, "politics"],
+    [/\b(elon|musk|tesla|spacex|mars)\b/, "Elon / space culture"],
+    [/\b(bitcoin|btc|eth|solana|sol)\b/, "crypto meta"],
+    [/\b(stock|share|equity|tokenized|amazon|apple|nvidia)\b/, "stock / equity narrative"],
+    [/\b(game|gaming|play|pixel|nft)\b/, "gaming / NFT"],
+    [/\b(love|heart|cute|baby|girl|boy)\b/, "cute / emotional meme"],
+    [/\b(moon|rocket|lambo|100x|send)\b/, "pure degen / moonbag"],
+    [/\b(culture|community|movement|revolution)\b/, "community culture"],
+    [/\b(animal|bear|bull|ape|monkey|frog)\b/, "animal mascot"],
+  ];
+  for (const [re, label] of rules) {
+    if (re.test(blob)) themes.push(label);
+  }
+  const uniq = [...new Set(themes)].slice(0, 3);
+
+  let story = "";
+  if (desc.length >= 20) {
+    // Compress description into a readable one-liner
+    const clean = desc.replace(/\s+/g, " ").replace(/https?:\/\/\S+/g, "").trim();
+    story = clean.slice(0, 180) + (clean.length > 180 ? "…" : "");
+  } else if (n || s) {
+    story =
+      (n ? n : s) +
+      (s && n ? " ($" + s + ")" : "") +
+      " reads as a " +
+      (uniq[0] || "meme / culture") +
+      " token" +
+      (uniq.length > 1 ? " with " + uniq.slice(1).join(" + ") + " flavor" : "") +
+      ".";
+  } else {
+    story = "No on-chain description. Thin lore — name/ticker only.";
+  }
+
+  if (uniq.length && desc.length >= 20) {
+    story += " Themes: " + uniq.join(", ") + ".";
+  }
+  return { story, themes: uniq, desc: desc.slice(0, 220) || "" };
+}
+
+function lore(pump, ogTag, bundlePct, sniperPct, mc, name, symbol) {
+  const read = readTokenStory(pump, name, symbol);
+  const desc = read.desc;
   let score = 50;
   const notes = [];
 
@@ -3832,22 +3884,32 @@ function lore(pump, ogTag, bundlePct, sniperPct, mc) {
   }
   if (ogTag === "VAMP") {
     score -= 18;
-    notes.push("vamp ticker");
+    notes.push("vamp of existing name/ticker");
   }
   if (ogTag === "SERIAL") {
     score -= 6;
     notes.push("serial dev");
   }
-  if (desc.length > 40) {
-    score += 8;
-    notes.push("has story");
+  if (desc.length > 60) {
+    score += 10;
+    notes.push("clear story");
+  } else if (desc.length > 20) {
+    score += 5;
+    notes.push("some lore");
   } else {
-    score -= 6;
+    score -= 8;
     notes.push("thin lore");
+  }
+  if (read.themes.length) {
+    score += 3;
+    notes.push(read.themes[0]);
   }
   if (pump && pump.twitter && pump.telegram) {
     score += 8;
     notes.push("socials linked");
+  } else if (pump && (pump.twitter || pump.telegram)) {
+    score += 3;
+    notes.push("partial socials");
   }
   if (bundlePct >= 20) {
     score -= 15;
@@ -3864,7 +3926,14 @@ function lore(pump, ogTag, bundlePct, sniperPct, mc) {
   if (score >= 70) verdict = "✅ watch";
   else if (score >= 50) verdict = "⚠️ mixed";
 
-  return { score, verdict, notes, desc: desc.slice(0, 200) || "No description." };
+  return {
+    score,
+    verdict,
+    notes,
+    desc: read.story || desc || "No description.",
+    story: read.story,
+    themes: read.themes,
+  };
 }
 
 function ogLine(fam) {
@@ -3956,15 +4025,88 @@ function parseBundlers(bundlers, risk) {
 }
 
 function parseHolders(holders, tokenInfo) {
-  const raw = holders && typeof holders === "object" ? holders : {};
-  const acc = raw.accounts || raw.holders || (Array.isArray(holders) ? holders : []);
-  const list = Array.isArray(acc) ? acc.filter((h) => h && (h.wallet || h.address)) : [];
-  const total =
-    num(raw.total) ||
+  const bags = [];
+  if (Array.isArray(holders)) bags.push(holders);
+  if (holders && typeof holders === "object") {
+    bags.push(holders);
+    if (holders.data && typeof holders.data === "object") bags.push(holders.data);
+    if (holders.result && typeof holders.result === "object") bags.push(holders.result);
+  }
+  if (tokenInfo && typeof tokenInfo === "object") {
+    bags.push(tokenInfo);
+    if (tokenInfo.token && typeof tokenInfo.token === "object") bags.push(tokenInfo.token);
+    if (tokenInfo.risk && typeof tokenInfo.risk === "object") bags.push(tokenInfo.risk);
+  }
+
+  let list = [];
+  let total = null;
+  for (const raw of bags) {
+    if (!raw) continue;
+    if (Array.isArray(raw) && !list.length) {
+      list = raw.filter((h) => h && (h.wallet || h.address || h.owner || h.pubkey));
+      continue;
+    }
+    if (typeof raw !== "object") continue;
+    const acc =
+      raw.accounts ||
+      raw.holders ||
+      raw.topHolders ||
+      raw.top_holders ||
+      raw.holderList ||
+      (Array.isArray(raw.data) ? raw.data : null) ||
+      (raw.holders && Array.isArray(raw.holders.accounts) ? raw.holders.accounts : null);
+    if (Array.isArray(acc) && acc.length && !list.length) {
+      list = acc.filter((h) => h && (h.wallet || h.address || h.owner || h.pubkey));
+    }
+    total =
+      total ||
+      num(raw.total) ||
+      num(raw.count) ||
+      num(raw.holderCount) ||
+      num(raw.holdersCount) ||
+      num(raw.holders && raw.holders.total) ||
+      num(raw.holders && !Array.isArray(raw.holders) ? raw.holders.count : null) ||
+      null;
+  }
+  total =
+    total ||
     num(tokenInfo && tokenInfo.holders) ||
     num(tokenInfo && tokenInfo.token && tokenInfo.token.holders) ||
-    null;
+    num(tokenInfo && tokenInfo.holderCount) ||
+    (list.length ? list.length : null);
+
+  // Normalize wallet field so sizeTag / short always work
+  list = list.map((h) => {
+    if (!h || typeof h !== "object") return h;
+    const wallet = String(h.wallet || h.address || h.owner || h.pubkey || "").trim();
+    const percentage = Number(
+      h.percentage ?? h.percent ?? h.pct ?? h.share ?? (h.uiAmount && h.supply ? null : h.uiPercentage) ?? 0
+    );
+    return { ...h, wallet, address: wallet, percentage: Number.isFinite(percentage) ? percentage : 0 };
+  }).filter((h) => h && h.wallet);
+
+  // Sort by percentage desc when available
+  list.sort((a, b) => Number(b.percentage || 0) - Number(a.percentage || 0));
   return { list, total };
+}
+
+async function fetchHoldersSafe(ca) {
+  if (!ST_KEY || !isCa(ca) || isEvmCa(ca)) return null;
+  const paths = [
+    "/tokens/" + ca + "/holders?enrich=all",
+    "/tokens/" + ca + "/holders",
+    "/tokens/" + ca + "/top-holders",
+    "/tokens/" + ca + "/holders?limit=20",
+  ];
+  for (const p of paths) {
+    const data = await soft(st(p));
+    if (!data) continue;
+    const parsed = parseHolders(data, null);
+    if (parsed.list && parsed.list.length) return data;
+    // still return data if it has a total count
+    if (parsed.total) return data;
+  }
+  return null;
 }
 
 /* ───────── Locks: Streamflow / Jupiter / LP (Rugcheck + Solana Tracker) ───────── */
@@ -6010,44 +6152,47 @@ async function buildAnalysisCard(ca) {
     return { error: "Usage: /analysis CA   (Solana only)" + FOOTER };
   }
 
+  // Soft-fail every source so one bad API never kills the card
   const [pump, pair, paid, tokenInfo, bundlers, holders, locks] = await Promise.all([
-    pumpCoin(ca),
-    dexPair(ca),
-    dexPaid(ca),
-    st("/tokens/" + ca),
-    st("/tokens/" + ca + "/bundlers"),
-    st("/tokens/" + ca + "/holders?enrich=all"),
-    fetchTokenLocks(ca),
+    soft(pumpCoin(ca)),
+    soft(dexPair(ca)),
+    soft(dexPaid(ca)),
+    soft(st("/tokens/" + ca)),
+    soft(st("/tokens/" + ca + "/bundlers")),
+    soft(fetchHoldersSafe(ca)),
+    soft(fetchTokenLocks(ca)),
   ]);
 
-  const fam = await findOgFamily(ca, pump, pair, tokenInfo);
-  let ogTag = fam.isOg ? "OG" : "VAMP";
-  if (fam.all.length <= 1) ogTag = fam.isOg ? "OG" : "UNKNOWN";
+  let fam = { all: [], og: null, you: null, isOg: false, name: "", symbol: "" };
+  try {
+    fam = await findOgFamily(ca, pump, pair, tokenInfo);
+  } catch (_) {}
 
-  const q = marketQuote(pump, pair, tokenInfo);
-  const name = q.name || "";
-  const symbol = q.symbol || "";
+  let ogTag = fam.isOg ? "OG" : "VAMP";
+  if (!fam.all || fam.all.length <= 1) ogTag = fam.isOg ? "OG" : "UNKNOWN";
+
+  const q = marketQuote(pump, pair, tokenInfo) || {};
+  const name = q.name || (pump && pump.name) || fam.name || "";
+  const symbol = q.symbol || (pump && pump.symbol) || fam.symbol || "";
   const mc = q.mc;
-  const risk = tokenRisk(tokenInfo);
+  const risk = tokenRisk(tokenInfo) || {};
   const sniperPct = Number((risk.snipers && (risk.snipers.totalPercentage || risk.snipers.percentage)) || 0);
   const insiderPct = Number((risk.insiders && risk.insiders.totalPercentage) || 0);
   const parsedB = parseBundlers(bundlers, risk);
   const bPct = Number(parsedB.nowPct || 0);
   const holderData = parseHolders(holders, tokenInfo);
-  const L = lore(pump, ogTag, bPct, sniperPct, Number(mc || 0));
+  const L = lore(pump, ogTag, bPct, sniperPct, Number(mc || 0), name, symbol);
 
-  let profilePaid = !!(paid && (paid.profilePaid || paid.adPaid));
+  const profilePaid = !!(paid && (paid.profilePaid || paid.adPaid));
   let paidLabel = "not paid";
-  if (paid && paid.ok === false) paidLabel = "API fail";
+  if (paid && paid.ok === false) paidLabel = "API n/a";
   else if (paid && paid.profilePaid && paid.adPaid) paidLabel = "profile + ad";
   else if (paid && paid.profilePaid) paidLabel = "profile paid";
   else if (paid && paid.adPaid) paidLabel = "ad paid";
-  else paidLabel = "not paid";
 
   const boosts = (pair && pair.boosts && pair.boosts.active) != null ? String(pair.boosts.active) : "n/a";
   const top10 = (holderData.list || []).slice(0, 10).reduce((s, h) => s + Number(h.percentage || 0), 0);
 
-  // Composite VEX score (0-100)
   let score = 50;
   if (ogTag === "OG") score += 14;
   else if (ogTag === "VAMP") score -= 12;
@@ -6066,133 +6211,228 @@ async function buildAnalysisCard(ca) {
 
   let grade = "WEAK";
   let gradeColor = "#ff4d4d";
-  if (score >= 75) { grade = "STRONG"; gradeColor = "#22ff66"; }
-  else if (score >= 55) { grade = "MIXED"; gradeColor = "#ffcc33"; }
-  else if (score >= 40) { grade = "CAUTION"; gradeColor = "#ff8833"; }
+  if (score >= 75) {
+    grade = "STRONG";
+    gradeColor = "#22ff66";
+  } else if (score >= 55) {
+    grade = "MIXED";
+    gradeColor = "#ffcc33";
+  } else if (score >= 40) {
+    grade = "CAUTION";
+    gradeColor = "#ff8833";
+  }
 
   const ogLabel = ogTag === "OG" ? "OG" : ogTag === "VAMP" ? "VAMP" : "CHECK";
   const ogColor = ogTag === "OG" ? "#22ff66" : ogTag === "VAMP" ? "#b388ff" : "#9aa3ad";
 
   const { createCanvas } = require("@napi-rs/canvas");
   const font = await registerPnlFonts();
-  const W = 900;
-  const H = 1100;
+  const W = 920;
+  const H = 1180;
   const canvas = createCanvas(W, H);
   const g = canvas.getContext("2d");
 
-  // background
-  g.fillStyle = "#0b0e13";
-  g.fillRect(0, 0, W, H);
+  // deep gradient background
   const bg = g.createLinearGradient(0, 0, W, H);
-  bg.addColorStop(0, "#10141c");
-  bg.addColorStop(0.55, "#0b0e13");
-  bg.addColorStop(1, "#121018");
+  bg.addColorStop(0, "#0a0c12");
+  bg.addColorStop(0.45, "#10131c");
+  bg.addColorStop(1, "#160b14");
   g.fillStyle = bg;
   g.fillRect(0, 0, W, H);
 
-  // header card
-  roundRectPath(g, 28, 28, W - 56, 210, 22);
-  g.fillStyle = "#151a22";
+  // soft glow blobs
+  function glow(x, y, r, color) {
+    const grd = g.createRadialGradient(x, y, 0, x, y, r);
+    grd.addColorStop(0, color);
+    grd.addColorStop(1, "rgba(0,0,0,0)");
+    g.fillStyle = grd;
+    g.beginPath();
+    g.arc(x, y, r, 0, Math.PI * 2);
+    g.fill();
+  }
+  glow(160, 120, 220, "rgba(255,42,42,0.18)");
+  const gradeGlow =
+    gradeColor === "#22ff66"
+      ? "rgba(34,255,102,0.16)"
+      : gradeColor === "#ffcc33"
+      ? "rgba(255,204,51,0.16)"
+      : gradeColor === "#ff8833"
+      ? "rgba(255,136,51,0.16)"
+      : "rgba(255,77,77,0.16)";
+  glow(780, 180, 260, gradeGlow);
+  glow(460, 980, 280, "rgba(120,80,255,0.12)");
+
+  // header panel
+  roundRectPath(g, 24, 24, W - 48, 230, 24);
+  const head = g.createLinearGradient(24, 24, W - 24, 254);
+  head.addColorStop(0, "#161b26");
+  head.addColorStop(1, "#1a1220");
+  g.fillStyle = head;
   g.fill();
-  g.strokeStyle = "#2a3140";
+  g.strokeStyle = "rgba(255,255,255,0.08)";
   g.lineWidth = 2;
   g.stroke();
 
-  drawVexLogo(g, 52, 48, 64);
-  g.font = "bold 42px " + font;
+  drawVexLogo(g, 48, 48, 70);
+  g.font = "bold 46px " + font;
   g.fillStyle = "#ffffff";
-  g.fillText("VE", 130, 92);
+  g.fillText("VE", 136, 96);
   const veW = g.measureText("VE").width;
   g.fillStyle = "#ff2a2a";
-  g.fillText("X", 130 + veW, 92);
+  g.fillText("X", 136 + veW, 96);
   const xW = g.measureText("X").width;
   g.fillStyle = "#ffffff";
-  g.fillText("LORE", 130 + veW + xW, 92);
-
-  g.font = "bold 20px " + font;
-  g.fillStyle = "#8b95a2";
-  g.fillText("TOKEN ANALYSIS", 130, 124);
-
-  g.font = "bold 36px " + font;
-  g.fillStyle = "#ffffff";
-  g.fillText(fitText(g, (symbol ? "$" + symbol : "TOKEN") + (name ? "  ·  " + name : ""), 520), 52, 178);
+  g.fillText("LORE", 136 + veW + xW, 96);
 
   g.font = "bold 18px " + font;
-  g.fillStyle = "#6b7380";
-  g.fillText(fitText(g, ca, 520), 52, 210);
+  g.fillStyle = "#8b95a2";
+  g.fillText("TOKEN ANALYSIS  ·  LIVE SHEET", 136, 128);
 
-  // score ring
-  const cx = 760;
-  const cy = 130;
-  const r = 72;
+  g.font = "bold 38px " + font;
+  g.fillStyle = "#ffffff";
+  g.fillText(fitText(g, (symbol ? "$" + symbol : "TOKEN") + (name ? "  ·  " + name : ""), 500), 48, 180);
+
+  g.font = "bold 17px " + font;
+  g.fillStyle = "#6b7380";
+  g.fillText(fitText(g, ca, 500), 48, 212);
+
+  // score ring with outer glow
+  const cx = 780;
+  const cy = 138;
+  const r = 78;
+  g.beginPath();
+  g.arc(cx, cy, r + 8, 0, Math.PI * 2);
+  g.strokeStyle = "rgba(255,255,255,0.05)";
+  g.lineWidth = 16;
+  g.stroke();
   g.beginPath();
   g.arc(cx, cy, r, 0, Math.PI * 2);
   g.strokeStyle = "#222833";
-  g.lineWidth = 12;
+  g.lineWidth = 14;
   g.stroke();
   const pctScore = score / 100;
   g.beginPath();
   g.arc(cx, cy, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * pctScore);
   g.strokeStyle = gradeColor;
-  g.lineWidth = 12;
+  g.lineWidth = 14;
   g.lineCap = "round";
   g.stroke();
-  g.font = "bold 40px " + font;
+  g.font = "bold 48px " + font;
   g.fillStyle = "#ffffff";
   g.textAlign = "center";
-  g.fillText(String(score), cx, cy + 8);
-  g.font = "bold 16px " + font;
+  g.fillText(String(score), cx, cy + 6);
+  g.font = "bold 18px " + font;
   g.fillStyle = gradeColor;
-  g.fillText(grade, cx, cy + 36);
+  g.fillText(grade, cx, cy + 38);
   g.textAlign = "left";
 
-  // metric rows
-  function row(y, label, value, valueColor) {
-    roundRectPath(g, 28, y, W - 56, 64, 14);
-    g.fillStyle = "#12171f";
+  // pill helper
+  function pill(x, y, w, h, text, bgc, fgc) {
+    roundRectPath(g, x, y, w, h, 12);
+    g.fillStyle = bgc;
     g.fill();
-    g.strokeStyle = "#222833";
-    g.lineWidth = 1.5;
-    g.stroke();
-    g.font = "bold 22px " + font;
-    g.fillStyle = "#8b95a2";
-    g.fillText(label, 52, y + 40);
-    g.fillStyle = valueColor || "#ffffff";
-    g.textAlign = "right";
-    g.fillText(fitText(g, String(value), 420), W - 52, y + 40);
+    g.font = "bold 18px " + font;
+    g.fillStyle = fgc;
+    g.textAlign = "center";
+    g.fillText(text, x + w / 2, y + h / 2 + 6);
     g.textAlign = "left";
   }
 
-  let y = 260;
-  row(y, "OG status", ogLabel, ogColor); y += 76;
-  row(y, "Market cap", moneyMkt(mc)); y += 76;
-  row(y, "Liquidity", moneyMkt(q.liq)); y += 76;
-  row(y, "Volume 24h", moneyMkt(q.vol)); y += 76;
-  row(y, "Bundles now", bPct.toFixed(1) + "%", bPct >= 15 ? "#ff4d4d" : "#22ff66"); y += 76;
-  row(y, "Snipers / Insiders", sniperPct.toFixed(1) + "% / " + insiderPct.toFixed(1) + "%"); y += 76;
-  row(y, "Top 10 holders", top10.toFixed(1) + "%", top10 >= 40 ? "#ff8833" : "#ffffff"); y += 76;
-  row(y, "Dex paid", paidLabel, profilePaid ? "#22ff66" : "#ff4d4d"); y += 76;
-  row(y, "Boosts", boosts); y += 76;
-  row(y, "Lore score", (L.score != null ? L.score : "?") + "/100  " + (L.verdict || ""), gradeColor); y += 76;
+  // status pills under header
+  let px = 48;
+  const py = 270;
+  const ogBg = ogTag === "OG" ? "rgba(34,255,102,0.18)" : ogTag === "VAMP" ? "rgba(179,136,255,0.18)" : "rgba(154,163,173,0.18)";
+  const gradeBg =
+    grade === "STRONG"
+      ? "rgba(34,255,102,0.18)"
+      : grade === "MIXED"
+      ? "rgba(255,204,51,0.18)"
+      : grade === "CAUTION"
+      ? "rgba(255,136,51,0.18)"
+      : "rgba(255,77,77,0.18)";
+  pill(px, py, 110, 36, ogLabel, ogBg, ogColor);
+  px += 122;
+  pill(px, py, 130, 36, grade, gradeBg, gradeColor);
+  px += 142;
+  pill(px, py, profilePaid ? 150 : 130, 36, profilePaid ? "DEX PAID" : "DEX FREE", profilePaid ? "rgba(34,255,102,0.18)" : "rgba(255,77,77,0.18)", profilePaid ? "#22ff66" : "#ff4d4d");
 
-  // footer notes
-  roundRectPath(g, 28, y, W - 56, 120, 14);
-  g.fillStyle = "#12171f";
+  function row(y, label, value, valueColor, accent) {
+    roundRectPath(g, 24, y, W - 48, 62, 16);
+    g.fillStyle = "rgba(18,22,30,0.92)";
+    g.fill();
+    g.strokeStyle = "rgba(255,255,255,0.06)";
+    g.lineWidth = 1.5;
+    g.stroke();
+    if (accent) {
+      g.fillStyle = accent;
+      g.fillRect(24, y + 10, 5, 42);
+    }
+    g.font = "bold 21px " + font;
+    g.fillStyle = "#8b95a2";
+    g.fillText(label, 48, y + 40);
+    g.fillStyle = valueColor || "#ffffff";
+    g.textAlign = "right";
+    g.fillText(fitText(g, String(value), 440), W - 48, y + 40);
+    g.textAlign = "left";
+  }
+
+  let y = 324;
+  row(y, "Market cap", moneyMkt(mc), "#ffffff", "#4da3ff"); y += 70;
+  row(y, "Liquidity / Vol 24h", moneyMkt(q.liq) + "  ·  " + moneyMkt(q.vol), "#ffffff", "#4da3ff"); y += 70;
+  row(y, "Bundles now", bPct.toFixed(1) + "%", bPct >= 15 ? "#ff4d4d" : "#22ff66", bPct >= 15 ? "#ff4d4d" : "#22ff66"); y += 70;
+  row(y, "Snipers / Insiders", sniperPct.toFixed(1) + "% / " + insiderPct.toFixed(1) + "%", "#ffffff", "#ff8833"); y += 70;
+  row(y, "Top 10 holders", (top10 > 0 ? top10.toFixed(1) + "%" : "n/a") + (holderData.total != null ? "  ·  count " + holderData.total : ""), top10 >= 40 ? "#ff8833" : "#ffffff", "#b388ff"); y += 70;
+  row(y, "Dex paid / Boosts", paidLabel + "  ·  boosts " + boosts, profilePaid ? "#22ff66" : "#ff4d4d", profilePaid ? "#22ff66" : "#ff4d4d"); y += 70;
+  row(y, "Lore score", (L.score != null ? L.score : "?") + "/100  " + (L.verdict || ""), gradeColor, gradeColor); y += 78;
+
+  // lore story panel
+  roundRectPath(g, 24, y, W - 48, 200, 18);
+  const loreBg = g.createLinearGradient(24, y, 24, y + 200);
+  loreBg.addColorStop(0, "rgba(28,18,36,0.95)");
+  loreBg.addColorStop(1, "rgba(16,18,28,0.95)");
+  g.fillStyle = loreBg;
   g.fill();
-  g.strokeStyle = "#222833";
-  g.lineWidth = 1.5;
+  g.strokeStyle = "rgba(179,136,255,0.25)";
+  g.lineWidth = 2;
   g.stroke();
+
+  g.font = "bold 22px " + font;
+  g.fillStyle = "#b388ff";
+  g.fillText("🧠  What is this token?", 48, y + 40);
+
   g.font = "bold 20px " + font;
-  g.fillStyle = "#8b95a2";
-  g.fillText("Quick notes", 52, y + 36);
-  g.font = "bold 18px " + font;
-  g.fillStyle = "#d7dde6";
-  const notes = (L.notes && L.notes.length ? L.notes.join(" · ") : "No lore notes") +
-    (fam.og && !fam.isOg ? " · OG " + short(fam.og.mint) : "");
-  g.fillText(fitText(g, notes, W - 120), 52, y + 68);
+  g.fillStyle = "#e8ecf2";
+  const story = String(L.story || L.desc || "No lore yet.").replace(/\s+/g, " ").trim();
+  // simple word wrap
+  const words = story.split(" ");
+  let line = "";
+  let ly = y + 78;
+  for (const w of words) {
+    const test = line ? line + " " + w : w;
+    if (g.measureText(test).width > W - 110) {
+      g.fillText(line, 48, ly);
+      ly += 28;
+      line = w;
+      if (ly > y + 160) break;
+    } else {
+      line = test;
+    }
+  }
+  if (line && ly <= y + 170) g.fillText(line, 48, ly);
+
   g.font = "bold 16px " + font;
   g.fillStyle = "#6b7380";
-  g.fillText("Made by Robin with Love  ·  Always DYOR", 52, y + 98);
+  g.fillText(
+    (L.notes && L.notes.length ? L.notes.join(" · ") : "—") +
+      (fam.og && !fam.isOg ? "  ·  OG " + short(fam.og.mint) : ""),
+    48,
+    y + 188
+  );
+
+  y += 220;
+  g.font = "bold 16px " + font;
+  g.fillStyle = "#5a6370";
+  g.fillText("Made by Robin with Love   ·   Always DYOR   ·   VEXLORE", 48, y);
 
   return { buffer: canvas.toBuffer("image/png"), score, grade, ogTag };
 }
@@ -6948,13 +7188,13 @@ async function buildCallouts(ca) {
 
 async function buildReport(ca) {
   const [pump, pair, paid, tokenInfo, bundlers, holders, locks] = await Promise.all([
-    pumpCoin(ca),
-    dexPair(ca),
-    dexPaid(ca),
-    st("/tokens/" + ca),
-    st("/tokens/" + ca + "/bundlers"),
-    st("/tokens/" + ca + "/holders?enrich=all"),
-    fetchTokenLocks(ca),
+    soft(pumpCoin(ca)),
+    soft(dexPair(ca)),
+    soft(dexPaid(ca)),
+    soft(st("/tokens/" + ca)),
+    soft(st("/tokens/" + ca + "/bundlers")),
+    soft(fetchHoldersSafe(ca)),
+    soft(fetchTokenLocks(ca)),
   ]);
 
   const fam = await findOgFamily(ca, pump, pair, tokenInfo);
@@ -7040,7 +7280,7 @@ async function buildReport(ca) {
   }
   if (pair && pair.info) paidBlock += "\nℹ️ Dex page has profile info (not the same as paid)";
 
-  const L = lore(pump, ogTag, bPct, sniperPct, Number(mc || 0));
+  const L = lore(pump, ogTag, bPct, sniperPct, Number(mc || 0), name, symbol);
   const x = await xPulse(ca, pump, pair);
   const badge = ogTag === "OG" ? "🟢 OG" : ogTag === "VAMP" ? "🟣 VAMP" : "⚪ CHECK";
   const holderCountLine = holderData.total != null ? "count " + holderData.total + "\n" : "";
@@ -7076,20 +7316,26 @@ async function buildReport(ca) {
     "🎯 Snipers " + sniperPct.toFixed(1) + "% · Insiders " + insiderPct.toFixed(1) + "%";
 
   const holderBody = ST_KEY
-    ? esc(holderCountLine + (hLines.join("\n") || "none")) +
-      "\n⏱ avg hold " +
-      (avgHold == null ? "n/a" : holdHuman(avgHold)) +
-      " · avg PnL " +
-      (avgPnl == null ? "n/a" : money(avgPnl))
-    : "add Data API key";
+    ? (
+        hLines.length
+          ? esc(holderCountLine + hLines.join("\n")) +
+            "\n⏱ avg hold " +
+            (avgHold == null ? "n/a" : holdHuman(avgHold)) +
+            " · avg PnL " +
+            (avgPnl == null ? "n/a" : money(avgPnl))
+          : esc(holderCountLine || "") +
+            "Holders not indexed yet (retry refresh) · count " +
+            (holderData.total != null ? String(holderData.total) : "n/a")
+      )
+    : "add SOLANA_TRACKER_KEY for holders";
 
   const paidBody =
     esc(paidBlock) + "\n🚀 Boosts: " + ((pair && pair.boosts && pair.boosts.active) ?? "n/a");
 
   const loreBody =
     L.score + "/100  " + esc(L.verdict) + "\n" +
-    esc(L.desc) + "\n" +
-    esc(L.notes.join(" · "));
+    esc(L.story || L.desc || "No description.") + "\n" +
+    esc((L.notes || []).join(" · "));
 
   return (
     badge + "  <b>" + esc(name) + " (" + esc(symbol) + ")</b>\n" +
@@ -7100,9 +7346,7 @@ async function buildReport(ca) {
     buildLocksBlock(locks) + "\n" +
     boxSection("👛 Top holders", holderBody) + "\n" +
     boxSection("🧾 Dex paid", paidBody) +
-    (q.url ? "\n🔗 " + q.url + "\n" : "\n") +
-    (x ? "\n" + esc(x) + "\n" : "") +
-    "\n" +
+    (x ? "\n" + esc(x) + "\n" : "\n") +
     boxSection("🧠 Lore", loreBody) +
     FOOTER
   ).slice(0, 4000);
@@ -8553,6 +8797,7 @@ const kb = (ca) =>
     .text("📣 Callouts", "callouts:" + ca)
     .text("📈 Stonks", "sf:" + ca)
     .row()
+    .text("🧠 Analysis", "analysis:" + ca)
     .text("🗑 Delete", "del");
 
 const kbRh = (ca) =>
@@ -9294,6 +9539,39 @@ bot.callbackQuery(/^analysisref:(.+)$/, async (ctx) => {
     );
   } catch (_) {
     await ctx.answerCallbackQuery({ text: "failed" });
+  }
+});
+
+bot.callbackQuery(/^analysis:(.+)$/, async (ctx) => {
+  const ca = ctx.match[1];
+  if (!isCa(ca) || isEvmCa(ca)) {
+    return ctx.answerCallbackQuery({ text: "Solana CA only", show_alert: true });
+  }
+  await ctx.answerCallbackQuery({ text: "Building analysis..." });
+  try {
+    const card = await buildAnalysisCard(ca);
+    if (card.error) {
+      await ctx.reply(card.error, { parse_mode: "HTML", link_preview_options: { is_disabled: true } });
+      return;
+    }
+    const sent = await ctx.replyWithPhoto(new InputFile(card.buffer, "vexlore-analysis.png"), {
+      caption:
+        "🧠 <b>VEXLORE analysis</b> · score " +
+        card.score +
+        "/100 · " +
+        esc(card.grade) +
+        " · " +
+        esc(card.ogTag) +
+        "\n<code>" +
+        esc(ca) +
+        "</code>" +
+        FOOTER,
+      parse_mode: "HTML",
+      reply_markup: analysisKeyboard(ca),
+    });
+    rememberOwner(ctx.chat.id, sent.message_id, ctx.from && ctx.from.id);
+  } catch (e) {
+    await ctx.reply("Analysis failed: " + (e && e.message ? e.message : "fail") + FOOTER);
   }
 });
 bot.callbackQuery(/^ref:(.+)$/, async (ctx) => {
