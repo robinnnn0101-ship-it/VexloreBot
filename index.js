@@ -2397,7 +2397,7 @@ function geckoInfoBits(info) {
 
 function pairSocials(pair) {
   const info = pair && pair.info;
-  const out = { twitter: "", telegram: "", website: "", desc: "" };
+  const out = { twitter: "", telegram: "", website: "", github: "", desc: "" };
   if (!info) return out;
   const sites = Array.isArray(info.websites) ? info.websites : [];
   out.website = (sites[0] && (sites[0].url || sites[0])) || "";
@@ -2407,8 +2407,69 @@ function pairSocials(pair) {
     const url = String((s && (s.url || s.handle)) || "");
     if (type.includes("twitter") || type.includes("x")) out.twitter = url;
     if (type.includes("telegram")) out.telegram = url;
+    if (type.includes("github")) out.github = url;
   }
   return out;
+}
+
+/** Normalize a social URL; accept handle or full URL. */
+function normSocialUrl(kind, raw) {
+  const s = String(raw || "").trim();
+  if (!s) return "";
+  if (/^https?:\/\//i.test(s)) return s;
+  if (kind === "x" || kind === "twitter") {
+    const h = s.replace(/^@/, "").replace(/.*(?:x\.com|twitter\.com)\//i, "").split(/[/?#]/)[0];
+    return h ? "https://x.com/" + h : "";
+  }
+  if (kind === "tg" || kind === "telegram") {
+    const h = s.replace(/^@/, "").replace(/.*t\.me\//i, "").split(/[/?#]/)[0];
+    return h ? "https://t.me/" + h : "";
+  }
+  if (kind === "github") {
+    const h = s.replace(/^@/, "").replace(/.*github\.com\//i, "").split(/[/?#]/)[0];
+    return h ? "https://github.com/" + h : "";
+  }
+  if (kind === "web") return s.startsWith("http") ? s : "https://" + s.replace(/^\/+/, "");
+  return s;
+}
+
+/**
+ * Compact social row — only short marks, no full URLs visible.
+ * Prefer creation links (pump) then dex profile (pair.info).
+ */
+function compactSocials(pump, pair, ca) {
+  const ps = pairSocials(pair);
+  const xUrl =
+    normSocialUrl("x", (pump && (pump.twitter || pump.twitter_username)) || ps.twitter) || "";
+  const tgUrl =
+    normSocialUrl("tg", (pump && (pump.telegram || pump.telegram_username)) || ps.telegram) || "";
+  const webUrl =
+    normSocialUrl(
+      "web",
+      (pump && (pump.website || pump.website_url)) || ps.website
+    ) || "";
+  const ghUrl =
+    normSocialUrl(
+      "github",
+      (pump && (pump.github || pump.github_url)) || ps.github
+    ) || "";
+
+  const marks = [];
+  if (xUrl) marks.push('<a href="' + xUrl + '">x</a>');
+  if (webUrl) marks.push('<a href="' + webUrl + '">web</a>');
+  if (tgUrl) marks.push('<a href="' + tgUrl + '">tg</a>');
+  if (ghUrl) marks.push('<a href="' + ghUrl + '">gh</a>');
+
+  // always offer a CA search / more link
+  const moreUrl = isEvmCa(ca)
+    ? "https://dexscreener.com/search?q=" + encodeURIComponent(ca)
+    : "https://dexscreener.com/solana/" + encodeURIComponent(ca);
+  marks.push('<a href="' + moreUrl + '">more</a>');
+
+  if (marks.length <= 1 && !xUrl && !tgUrl && !webUrl && !ghUrl) {
+    return "🔗 no socials · " + marks[0];
+  }
+  return "🔗 " + marks.join(" · ");
 }
 
 function rhQuote(pair, gecko, bs, paprika) {
@@ -2952,7 +3013,41 @@ async function finishScanMessage(ctx, loadingMsg, text, replyMarkup, ca) {
     } catch (_) {}
   }
 
-  await sendScanMedia(ctx.api, chatId, ca, media);
+  // Prefer analytic card in place of token logo (keep dex banner). Solana only.
+  let analysisBuf = null;
+  if (isCa(ca) && !isEvmCa(ca)) {
+    try {
+      const card = await buildAnalysisCard(ca);
+      if (card && card.buffer && !card.error) analysisBuf = card.buffer;
+    } catch (_) {}
+  }
+
+  if (analysisBuf) {
+    const title =
+      (media && media.name ? esc(media.name) : "") +
+      (media && media.symbol ? " (" + esc(media.symbol) + ")" : "");
+    const caption =
+      "🧠 <b>Analysis</b>" +
+      (title ? " · " + title : "") +
+      "\n<code>" +
+      esc(ca) +
+      "</code>";
+    try {
+      await ctx.api.sendPhoto(chatId, new InputFile(analysisBuf, "vexlore-analysis.png"), {
+        caption,
+        parse_mode: "HTML",
+      });
+    } catch (_) {}
+    // Keep dex banner unchanged
+    if (media && media.banner) {
+      await sendOnePhoto(ctx.api, chatId, media.banner, {
+        caption: "🖼 DexScreener banner\n<code>" + esc(ca) + "</code>",
+        parse_mode: "HTML",
+      });
+    }
+  } else {
+    await sendScanMedia(ctx.api, chatId, ca, media);
+  }
 
   const sent = await ctx.api.sendMessage(chatId, text, {
     parse_mode: "HTML",
@@ -3745,11 +3840,8 @@ async function xPulse(ca, pump, pair) {
   const officialX = (pump && pump.twitter) || "";
 
   if (!X_BEARER) {
-    // Quiet fallback: show official / community only (set X_BEARER on Railway to rank posts)
-    return (
-      (officialX ? "🐦 Official: " + officialX + "\n" : "🐦 X posts: set X_BEARER on host to rank first / top\n") +
-      (comm ? "💬 " + comm : "💬 no community link")
-    );
+    // Quiet — social marks are handled by compactSocials; no scary host message
+    return "";
   }
 
   // Recent posts that mention the CA (exact string) — used for first + top + trending
@@ -3761,13 +3853,7 @@ async function xPulse(ca, pump, pair) {
   );
 
   if (!r.ok) {
-    return (
-      "🐦 " +
-      xApiErr(r) +
-      "\n" +
-      (officialX ? "Official: " + officialX + "\n" : "") +
-      (comm ? "💬 " + comm : "💬 no community link")
-    );
+    return ""; // compactSocials already shows links; skip noisy API errors on scan sheet
   }
 
   const tweets = (r.data && r.data.data) || [];
@@ -3778,11 +3864,7 @@ async function xPulse(ca, pump, pair) {
   });
 
   if (!tweets.length) {
-    return (
-      "🐦 no recent X posts with this CA\n" +
-      (officialX ? "Official: " + officialX + "\n" : "") +
-      (comm ? "💬 " + comm : "")
-    );
+    return "";
   }
 
   const scored = tweets.map((t) => {
@@ -3812,12 +3894,10 @@ async function xPulse(ca, pump, pair) {
   const trendLines = trending.map((row, i) => linePost(row, (i === 0 ? "🔥" : "📈") + " #" + (i + 1))).join("\n");
 
   return (
-    "🐦 recent posts with CA: " + tweets.length + "\n" +
-    "🥇 first in window: @" + ((umap[first.author_id] && umap[first.author_id].username) || "?") + "\n" +
-    "🆕 newest: @" + ((umap[newest.author_id] && umap[newest.author_id].username) || "?") + "\n" +
-    trendLines + "\n" +
-    (officialX ? "Official: " + officialX + "\n" : "") +
-    (comm ? "💬 " + comm : "")
+    "🐦 posts " + tweets.length +
+    " · first @" + ((umap[first.author_id] && umap[first.author_id].username) || "?") +
+    " · top @" + ((top.user && top.user.username) || "?") +
+    (trendLines ? "\n" + trendLines : "")
   );
 }
 
@@ -6190,14 +6270,16 @@ async function buildAnalysisCard(ca) {
   else if (paid && paid.profilePaid) paidLabel = "profile paid";
   else if (paid && paid.adPaid) paidLabel = "ad paid";
 
-  const boosts = (pair && pair.boosts && pair.boosts.active) != null ? String(pair.boosts.active) : "n/a";
+  const boostsRaw = pair && pair.boosts && pair.boosts.active;
+  const boostsN = Number(boostsRaw);
+  const boosts = Number.isFinite(boostsN) ? String(boostsN) : "n/a";
   const top10 = (holderData.list || []).slice(0, 10).reduce((s, h) => s + Number(h.percentage || 0), 0);
 
   let score = 50;
   if (ogTag === "OG") score += 14;
   else if (ogTag === "VAMP") score -= 12;
   if (profilePaid) score += 8;
-  if (Number(boosts) > 0) score += Math.min(6, Number(boosts));
+  if (Number.isFinite(boostsN) && boostsN > 0) score += Math.min(6, boostsN);
   if (bPct >= 20) score -= 12;
   else if (bPct >= 10) score -= 6;
   if (sniperPct >= 20) score -= 8;
@@ -6225,8 +6307,32 @@ async function buildAnalysisCard(ca) {
   const ogLabel = ogTag === "OG" ? "OG" : ogTag === "VAMP" ? "VAMP" : "CHECK";
   const ogColor = ogTag === "OG" ? "#22ff66" : ogTag === "VAMP" ? "#b388ff" : "#9aa3ad";
 
-  const { createCanvas } = require("@napi-rs/canvas");
-  const font = await registerPnlFonts();
+  // Ensure lore always has usable text (what is this token)
+  if (!L.story && !L.desc) {
+    L.story =
+      (name || symbol || "Token") +
+      (symbol && name ? " ($" + symbol + ")" : "") +
+      " — limited on-chain description. " +
+      (ogTag === "OG" ? "Appears to be an original deploy." : ogTag === "VAMP" ? "Looks like a copy of an earlier name/ticker." : "Origin unclear.");
+  }
+
+  let createCanvas;
+  try {
+    createCanvas = require("@napi-rs/canvas").createCanvas;
+  } catch (e) {
+    return {
+      error:
+        "Analysis card needs @napi-rs/canvas on the host.\n" +
+        "Install it, or use the text scan sheet for now." +
+        FOOTER,
+    };
+  }
+  let font;
+  try {
+    font = await registerPnlFonts();
+  } catch (_) {
+    font = "sans-serif";
+  }
   const W = 920;
   const H = 1180;
   const canvas = createCanvas(W, H);
@@ -6434,7 +6540,16 @@ async function buildAnalysisCard(ca) {
   g.fillStyle = "#5a6370";
   g.fillText("Made by Robin with Love   ·   Always DYOR   ·   VEXLORE", 48, y);
 
-  return { buffer: canvas.toBuffer("image/png"), score, grade, ogTag };
+  try {
+    return { buffer: canvas.toBuffer("image/png"), score, grade, ogTag };
+  } catch (e) {
+    return {
+      error:
+        "Analysis render failed: " +
+        (e && e.message ? e.message : "canvas error") +
+        FOOTER,
+    };
+  }
 }
 
 function analysisKeyboard(ca) {
@@ -7257,28 +7372,10 @@ async function buildReport(ca) {
   const avgHold = holds.length ? holds.reduce((a, b) => a + b, 0) / holds.length : null;
   const avgPnl = pnls.length ? pnls.reduce((a, b) => a + b, 0) / pnls.length : null;
 
-  let paidBlock = "❌ Dex profile not paid (API)";
-  if (!paid.ok) paidBlock = "⚠️ Dex orders request failed";
-  else if (paid.profilePaid || paid.adPaid) {
-    paidBlock =
-      (paid.profilePaid ? "✅ Profile paid" : "❌ Profile not paid") +
-      " · " +
-      (paid.adPaid ? "✅ Ad paid" : "Ad no") +
-      (paid.firstPay ? "\n🕒 first pay: " + utc(paid.firstPay) : "");
-    const extra = paid.orders
-      .filter((o) => o.live)
-      .slice(0, 4)
-      .map((o) => "• " + o.type + " · " + o.status + " · " + utc(o.when));
-    if (extra.length) paidBlock += "\n" + extra.join("\n");
-  } else if (paid.orders.length) {
-    paidBlock =
-      "❌ no live paid profile/ad\n" +
-      paid.orders
-        .slice(0, 4)
-        .map((o) => "• " + o.type + " · " + o.status + " · " + utc(o.when))
-        .join("\n");
-  }
-  if (pair && pair.info) paidBlock += "\nℹ️ Dex page has profile info (not the same as paid)";
+  // Clean Dex paid line — no creepy multi-line dump
+  let paidBlock = "❌ Dex";
+  if (!paid || !paid.ok) paidBlock = "⚠️ Dex n/a";
+  else if (paid.profilePaid || paid.adPaid) paidBlock = "✅ Dex paid";
 
   const L = lore(pump, ogTag, bPct, sniperPct, Number(mc || 0), name, symbol);
   const x = await xPulse(ca, pump, pair);
@@ -7329,8 +7426,18 @@ async function buildReport(ca) {
       )
     : "add SOLANA_TRACKER_KEY for holders";
 
+  const boostsN = pair && pair.boosts && pair.boosts.active;
   const paidBody =
-    esc(paidBlock) + "\n🚀 Boosts: " + ((pair && pair.boosts && pair.boosts.active) ?? "n/a");
+    paidBlock +
+    (boostsN != null && Number(boostsN) > 0 ? " · 🚀 " + boostsN : "");
+
+  // Compact social marks (no full URLs) — creation + dex profile links
+  const socialRow = compactSocials(pump, pair, ca);
+  // Optional short X pulse only when bearer works and posts exist (no ugly fallback text)
+  let xPulseLine = "";
+  if (X_BEARER && x && !/set X_BEARER|X API|no recent X posts|X lookup failed/i.test(x)) {
+    xPulseLine = "\n" + esc(String(x).split("\n").slice(0, 4).join(" · "));
+  }
 
   const loreBody =
     L.score + "/100  " + esc(L.verdict) + "\n" +
@@ -7345,8 +7452,8 @@ async function buildReport(ca) {
     boxSection("📦 Bundles", bundleBody) + "\n" +
     buildLocksBlock(locks) + "\n" +
     boxSection("👛 Top holders", holderBody) + "\n" +
-    boxSection("🧾 Dex paid", paidBody) +
-    (x ? "\n" + esc(x) + "\n" : "\n") +
+    boxSection("🧾 Dex", paidBody) +
+    "\n" + socialRow + xPulseLine + "\n" +
     boxSection("🧠 Lore", loreBody) +
     FOOTER
   ).slice(0, 4000);
