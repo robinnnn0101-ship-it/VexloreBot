@@ -1513,7 +1513,8 @@ async function findArcFamily(ca, pair, gecko) {
       const mint = p.baseToken && p.baseToken.address;
       const tick = sameTicker(bs, symbol);
       const nm = sameRhName(bn, name);
-      if ((!tick && !nm) || !mint) continue;
+      // Require BOTH ticker + name match
+      if (!(tick && nm) || !mint) continue;
       upsert(map, String(mint).toLowerCase(), {
         name: bn,
         symbol: bs,
@@ -1530,7 +1531,8 @@ async function findArcFamily(ca, pair, gecko) {
       const bn = t.name;
       const tick = sameTicker(bs, symbol);
       const nm = sameRhName(bn, name);
-      if ((!tick && !nm) || !mint) continue;
+      // Require BOTH ticker + name match
+      if (!(tick && nm) || !mint) continue;
       upsert(map, String(mint).toLowerCase(), {
         name: bn,
         symbol: bs,
@@ -1559,20 +1561,21 @@ async function findArcFamily(ca, pair, gecko) {
     const tb = b.created ? b.created.getTime() : Infinity;
     return ta - tb;
   });
+  // Strict: BOTH ticker + name match required for vamp family
   const bothFamily = all.filter((x) => x.tickerMatch && x.nameMatch && x.created);
-  const tickerFamily = all.filter((x) => x.tickerMatch && x.created);
-  const nameFamily = all.filter((x) => x.nameMatch && x.created);
-  const dated = bothFamily.length
-    ? bothFamily
-    : tickerFamily.length
-    ? tickerFamily
-    : nameFamily.length
-    ? nameFamily
-    : all.filter((x) => x.created);
-  const og = dated[0] || all[0] || null;
+  const dated = bothFamily.length ? bothFamily : [];
+  const og = dated[0] || null;
   const you = all.find((x) => String(x.mint).toLowerCase() === key) || null;
   const isOg = !!(og && you && String(og.mint).toLowerCase() === String(you.mint).toLowerCase());
-  return { all, og, you, isOg, name, symbol };
+  const family = bothFamily.slice();
+  if (you && !family.find((x) => String(x.mint).toLowerCase() === String(you.mint).toLowerCase())) family.unshift(you);
+  if (og && !family.find((x) => String(x.mint).toLowerCase() === String(og.mint).toLowerCase())) family.unshift(og);
+  family.sort((a, b) => {
+    const ta = a.created ? a.created.getTime() : Infinity;
+    const tb = b.created ? b.created.getTime() : Infinity;
+    return ta - tb;
+  });
+  return { all: family, og, you, isOg, name, symbol };
 }
 
 async function loadArcScan(ca) {
@@ -3115,6 +3118,67 @@ function pairDetailLines(pair) {
   );
 }
 
+function isStockShareQuote(sym, name) {
+  const s = String(sym || "").toLowerCase();
+  const n = String(name || "").toLowerCase();
+  const bag = s + " " + n;
+  // StonkFun pairs against tokenized stock / equity shares
+  if (/\b(share|stock|equity|tokenized)\b/.test(bag)) return true;
+  if (/\b(amazon|amzn|tesla|tsla|apple|aapl|nvidia|nvda|google|googl|meta|msft|microsoft|netflix|nflx|amd|coinbase|coin|spy|qqq|hood|robinhood)\b/.test(bag)) return true;
+  // common stonkfun quote symbols
+  if (/^(amzn|tsla|aapl|nvda|googl|meta|msft|nflx|amd|coin|spy|qqq|hood)$/i.test(String(sym || ""))) return true;
+  return false;
+}
+
+async function pumpSameNameOgNote(name, symbol, ca) {
+  try {
+    if (!name && !symbol) return "";
+    const famMap = new Map();
+    const queries = [...new Set([symbol, name].filter(Boolean))];
+    for (const q of queries) {
+      const coins = await pumpSearchAllExact(q, symbol || name, name || symbol);
+      for (const c of coins) {
+        if (!c || !c.mint) continue;
+        const tick = sameTicker(c.symbol, symbol || c.symbol);
+        const nm = sameTicker(c.name, name || c.name);
+        if (!(tick && nm)) continue;
+        upsert(famMap, c.mint, {
+          name: c.name,
+          symbol: c.symbol,
+          created: toDate(c.created_timestamp),
+          mc: c.usd_market_cap || c.market_cap,
+          tickerMatch: true,
+          nameMatch: true,
+        });
+      }
+    }
+    const all = [...famMap.values()].sort((a, b) => {
+      const ta = a.created ? a.created.getTime() : Infinity;
+      const tb = b.created ? b.created.getTime() : Infinity;
+      return ta - tb;
+    });
+    if (!all.length) return "";
+    const og = all[0];
+    const you = all.find((x) => x.mint === ca);
+    const isOg = !!(og && String(og.mint) === String(ca));
+    const sameOnPump = all.filter((x) => x.mint !== ca).slice(0, 4);
+    let line =
+      (isOg
+        ? "🟢 OG on Pump.fun for this name/ticker"
+        : "🟣 Not first on Pump.fun · OG <code>" + esc(og.mint) + "</code>") +
+      "\\n🕐 Pump OG: " + utc(og.created) +
+      " · " + esc(og.name || "") + " (" + esc(og.symbol || "") + ")";
+    if (sameOnPump.length) {
+      line +=
+        "\\n🧬 Same name on Pump.fun: " +
+        sameOnPump.map((x) => short(x.mint) + (x.created ? " " + utc(x.created).slice(0, 10) : "")).join(" · ");
+    }
+    return line;
+  } catch (_) {
+    return "";
+  }
+}
+
 function sfSolLines(row, pair, paid) {
   if (!row || !row.listed || !row.token) {
     return (
@@ -3271,10 +3335,44 @@ async function buildStonks(ca) {
   if (otherPad && otherPad.source === "moonshot") {
     extraPads += "\n🌙 Moonshot-style index hit for this mint";
   }
+
+  // Stock-share OG note: launched against Amazon/Tesla/etc share + same names on Pump.fun
+  let shareNote = "";
+  try {
+    const t = row && row.token;
+    const L = (row && row.launch) || {};
+    const q = (t && t.quote) || L.quote || {};
+    const quoteSym =
+      (t && (t.quoteSymbol || t.quote && t.quote.symbol)) ||
+      q.symbol ||
+      L.quoteSymbol ||
+      (pair && pair.quoteToken && pair.quoteToken.symbol) ||
+      "";
+    const quoteName =
+      q.name ||
+      (t && t.quoteName) ||
+      (pair && pair.quoteToken && pair.quoteToken.name) ||
+      "";
+    const tokName = (t && (t.name || L.name)) || (pair && pair.baseToken && pair.baseToken.name) || "";
+    const tokSym = (t && (t.symbol || L.symbol)) || (pair && pair.baseToken && pair.baseToken.symbol) || "";
+    if (isStockShareQuote(quoteSym, quoteName)) {
+      shareNote +=
+        "\n\n🏷 <b>Stock share pair</b>\n" +
+        "Launched on <b>" + esc(quoteName || quoteSym) + "</b> share" +
+        (quoteSym ? " ($" + esc(quoteSym) + ")" : "") +
+        "\nThis is an OG-style stonk pair vs the underlying share (not SOL/USDC).";
+    }
+    const pumpNote = await pumpSameNameOgNote(tokName, tokSym, ca);
+    if (pumpNote) {
+      shareNote += "\n\n🧬 <b>Pump.fun same name</b>\n" + pumpNote;
+    }
+  } catch (_) {}
+
   return (
     "📈 <b>StonkFun check</b>\n" +
     "<code>" + esc(ca) + "</code>\n\n" +
     sfSolLines(row, pair, paid) +
+    shareNote +
     extraPads +
     FOOTER
   ).slice(0, 4000);
@@ -3354,7 +3452,8 @@ async function pumpSearchAllExact(term, symbol, name) {
       if (!c || !c.mint) continue;
       const tick = sameTicker(c.symbol, symbol);
       const nm = sameTicker(c.name, name);
-      if (!tick && !nm) continue;
+      // Require BOTH name + ticker match to avoid false vamp hits
+      if (!(tick && nm)) continue;
       out.push(c);
     }
     if (coins.length < limit) break;
@@ -3372,7 +3471,8 @@ function ingestStSearchHits(list, map, symbol, name) {
     const bn = tok.name || item.name;
     const tick = sameTicker(bs, symbol);
     const nm = sameTicker(bn, name);
-    if ((!tick && !nm) || !mint) continue;
+    // Require BOTH name + ticker match
+    if (!(tick && nm) || !mint) continue;
     const created =
       toDate(tok.createdAt || tok.creationTime || tok.created || item.createdAt) ||
       toDate(item.pools && item.pools[0] && item.pools[0].createdAt);
@@ -3446,7 +3546,8 @@ async function findOgFamily(ca, pump, pair, tokenInfo) {
       const mint = p.baseToken && p.baseToken.address;
       const tick = sameTicker(bs, symbol);
       const nm = sameTicker(bn, name);
-      if ((!tick && !nm) || !mint) continue;
+      // Require BOTH name + ticker match for Solana vamp family
+      if (!(tick && nm) || !mint) continue;
       upsert(map, mint, {
         name: bn,
         symbol: bs,
@@ -3477,21 +3578,23 @@ async function findOgFamily(ca, pump, pair, tokenInfo) {
     return ta - tb;
   });
 
+  // Strict: only tokens matching BOTH name + ticker count as the vamp family
   const bothFamily = all.filter((x) => x.tickerMatch && x.nameMatch && x.created);
-  const tickerFamily = all.filter((x) => x.tickerMatch && x.created);
-  const nameFamily = all.filter((x) => x.nameMatch && x.created);
-  const dated = bothFamily.length
-    ? bothFamily
-    : tickerFamily.length
-    ? tickerFamily
-    : nameFamily.length
-    ? nameFamily
-    : all.filter((x) => x.created);
-  const og = dated[0] || all[0] || null;
+  const dated = bothFamily.length ? bothFamily : all.filter((x) => x.tickerMatch && x.nameMatch && x.created);
+  const og = dated[0] || (bothFamily[0] || null) || null;
   const you = all.find((x) => x.mint === ca) || null;
   const isOg = !!(og && you && og.mint === you.mint);
+  // Restrict displayed family to both-match only (avoids false vamps)
+  const family = bothFamily.length ? bothFamily : (you ? [you] : []);
+  if (you && !family.find((x) => x.mint === you.mint)) family.unshift(you);
+  if (og && !family.find((x) => x.mint === og.mint)) family.unshift(og);
+  family.sort((a, b) => {
+    const ta = a.created ? a.created.getTime() : Infinity;
+    const tb = b.created ? b.created.getTime() : Infinity;
+    return ta - tb;
+  });
 
-  return { all, og, you, isOg, name, symbol };
+  return { all: family, og, you, isOg, name, symbol };
 }
 
 async function findRhFamily(ca, pair, gecko) {
@@ -3521,7 +3624,8 @@ async function findRhFamily(ca, pair, gecko) {
       const mint = p.baseToken && p.baseToken.address;
       const tick = sameTicker(bs, symbol);
       const nm = sameRhName(bn, name);
-      if ((!tick && !nm) || !mint) continue;
+      // Require BOTH ticker + name match
+      if (!(tick && nm) || !mint) continue;
       upsert(map, String(mint).toLowerCase(), {
         name: bn,
         symbol: bs,
@@ -3538,7 +3642,8 @@ async function findRhFamily(ca, pair, gecko) {
       const bn = t.name;
       const tick = sameTicker(bs, symbol);
       const nm = sameRhName(bn, name);
-      if ((!tick && !nm) || !mint) continue;
+      // Require BOTH ticker + name match
+      if (!(tick && nm) || !mint) continue;
       upsert(map, String(mint).toLowerCase(), {
         name: bn,
         symbol: bs,
@@ -3567,20 +3672,21 @@ async function findRhFamily(ca, pair, gecko) {
     const tb = b.created ? b.created.getTime() : Infinity;
     return ta - tb;
   });
+  // Strict: BOTH ticker + name match required for vamp family
   const bothFamily = all.filter((x) => x.tickerMatch && x.nameMatch && x.created);
-  const tickerFamily = all.filter((x) => x.tickerMatch && x.created);
-  const nameFamily = all.filter((x) => x.nameMatch && x.created);
-  const dated = bothFamily.length
-    ? bothFamily
-    : tickerFamily.length
-    ? tickerFamily
-    : nameFamily.length
-    ? nameFamily
-    : all.filter((x) => x.created);
-  const og = dated[0] || all[0] || null;
+  const dated = bothFamily.length ? bothFamily : [];
+  const og = dated[0] || null;
   const you = all.find((x) => String(x.mint).toLowerCase() === key) || null;
   const isOg = !!(og && you && String(og.mint).toLowerCase() === String(you.mint).toLowerCase());
-  return { all, og, you, isOg, name, symbol };
+  const family = bothFamily.slice();
+  if (you && !family.find((x) => String(x.mint).toLowerCase() === String(you.mint).toLowerCase())) family.unshift(you);
+  if (og && !family.find((x) => String(x.mint).toLowerCase() === String(og.mint).toLowerCase())) family.unshift(og);
+  family.sort((a, b) => {
+    const ta = a.created ? a.created.getTime() : Infinity;
+    const tb = b.created ? b.created.getTime() : Infinity;
+    return ta - tb;
+  });
+  return { all: family, og, you, isOg, name, symbol };
 }
 
 /** Mark the live “buzz” CA in a vamp family (highest MC among list). */
@@ -3640,16 +3746,18 @@ async function xPulse(ca, pump, pair) {
 
   if (!X_BEARER) {
     return (
-      "🐦 X: add X_BEARER to rank first / top post\n" +
+      "🐦 X: add X_BEARER env to rank first / top / trending posts for this CA\n" +
       (officialX ? "Official: " + officialX + "\n" : "") +
       (comm ? "💬 " + comm : "💬 no community link")
     );
   }
 
+  // Recent posts that mention the CA (exact string) — used for first + top + trending
+  const q = '"' + String(ca) + '" -is:retweet';
   const r = await xApi(
     "/2/tweets/search/recent?query=" +
-      encodeURIComponent('"' + String(ca) + '"') +
-      "&max_results=25&tweet.fields=public_metrics,created_at,author_id&expansions=author_id&user.fields=username"
+      encodeURIComponent(q) +
+      "&max_results=50&tweet.fields=public_metrics,created_at,author_id,lang&expansions=author_id&user.fields=username,public_metrics&sort_order=recency"
   );
 
   if (!r.ok) {
@@ -3679,17 +3787,35 @@ async function xPulse(ca, pump, pair) {
 
   const scored = tweets.map((t) => {
     const m = t.public_metrics || {};
-    return { score: (m.like_count || 0) + (m.retweet_count || 0) * 2, user: umap[t.author_id], t };
+    const score =
+      (m.like_count || 0) +
+      (m.retweet_count || 0) * 2 +
+      (m.reply_count || 0) +
+      (m.quote_count || 0) * 2;
+    return { score, user: umap[t.author_id], t, m };
   });
   scored.sort((a, b) => b.score - a.score);
 
-  const first = tweets.slice().sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)))[0];
+  const byTime = tweets.slice().sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+  const first = byTime[0];
+  const newest = byTime[byTime.length - 1];
   const top = scored[0];
+  const trending = scored.slice(0, 3);
+
+  const linePost = (row, tag) => {
+    const u = (row.user && row.user.username) || (umap[row.t.author_id] && umap[row.t.author_id].username) || "?";
+    const likes = (row.m && row.m.like_count) || 0;
+    const rts = (row.m && row.m.retweet_count) || 0;
+    return tag + " @" + u + " · ❤" + likes + " 🔁" + rts + " · score " + row.score;
+  };
+
+  const trendLines = trending.map((row, i) => linePost(row, (i === 0 ? "🔥" : "📈") + " #" + (i + 1))).join("\n");
 
   return (
-    "🐦 recent posts: " + tweets.length + "\n" +
-    "🔥 top: @" + ((top.user && top.user.username) || "?") + " (" + top.score + ")\n" +
-    "🥇 earliest in window: @" + ((umap[first.author_id] && umap[first.author_id].username) || "?") + "\n" +
+    "🐦 recent posts with CA: " + tweets.length + "\n" +
+    "🥇 first in window: @" + ((umap[first.author_id] && umap[first.author_id].username) || "?") + "\n" +
+    "🆕 newest: @" + ((umap[newest.author_id] && umap[newest.author_id].username) || "?") + "\n" +
+    trendLines + "\n" +
     (officialX ? "Official: " + officialX + "\n" : "") +
     (comm ? "💬 " + comm : "")
   );
@@ -4367,8 +4493,8 @@ function buildLocksBlock(locks) {
 }
 
 function boxSection(title, body) {
-  const clean = String(body || "").replace(/\n+$/, "");
-  return "┌─ " + title + "\n" + clean + "\n";
+  const clean = String(body || "").replace(/\n+$/, "").replace(/\n{3,}/g, "\n\n");
+  return "┌─ " + title + "\n" + clean + "\n└────────";
 }
 
 /* ───────── wallet behaviour analyser (solana only) ───────── */
@@ -5876,6 +6002,208 @@ async function buildPnlCard(chatId, ca, userId) {
   return { buffer, ca };
 }
 
+
+/* ───────── /analysis card (VEXLORE style score sheet) ───────── */
+
+async function buildAnalysisCard(ca) {
+  if (!isCa(ca) || isEvmCa(ca)) {
+    return { error: "Usage: /analysis CA   (Solana only)" + FOOTER };
+  }
+
+  const [pump, pair, paid, tokenInfo, bundlers, holders, locks] = await Promise.all([
+    pumpCoin(ca),
+    dexPair(ca),
+    dexPaid(ca),
+    st("/tokens/" + ca),
+    st("/tokens/" + ca + "/bundlers"),
+    st("/tokens/" + ca + "/holders?enrich=all"),
+    fetchTokenLocks(ca),
+  ]);
+
+  const fam = await findOgFamily(ca, pump, pair, tokenInfo);
+  let ogTag = fam.isOg ? "OG" : "VAMP";
+  if (fam.all.length <= 1) ogTag = fam.isOg ? "OG" : "UNKNOWN";
+
+  const q = marketQuote(pump, pair, tokenInfo);
+  const name = q.name || "";
+  const symbol = q.symbol || "";
+  const mc = q.mc;
+  const risk = tokenRisk(tokenInfo);
+  const sniperPct = Number((risk.snipers && (risk.snipers.totalPercentage || risk.snipers.percentage)) || 0);
+  const insiderPct = Number((risk.insiders && risk.insiders.totalPercentage) || 0);
+  const parsedB = parseBundlers(bundlers, risk);
+  const bPct = Number(parsedB.nowPct || 0);
+  const holderData = parseHolders(holders, tokenInfo);
+  const L = lore(pump, ogTag, bPct, sniperPct, Number(mc || 0));
+
+  let profilePaid = !!(paid && (paid.profilePaid || paid.adPaid));
+  let paidLabel = "not paid";
+  if (paid && paid.ok === false) paidLabel = "API fail";
+  else if (paid && paid.profilePaid && paid.adPaid) paidLabel = "profile + ad";
+  else if (paid && paid.profilePaid) paidLabel = "profile paid";
+  else if (paid && paid.adPaid) paidLabel = "ad paid";
+  else paidLabel = "not paid";
+
+  const boosts = (pair && pair.boosts && pair.boosts.active) != null ? String(pair.boosts.active) : "n/a";
+  const top10 = (holderData.list || []).slice(0, 10).reduce((s, h) => s + Number(h.percentage || 0), 0);
+
+  // Composite VEX score (0-100)
+  let score = 50;
+  if (ogTag === "OG") score += 14;
+  else if (ogTag === "VAMP") score -= 12;
+  if (profilePaid) score += 8;
+  if (Number(boosts) > 0) score += Math.min(6, Number(boosts));
+  if (bPct >= 20) score -= 12;
+  else if (bPct >= 10) score -= 6;
+  if (sniperPct >= 20) score -= 8;
+  else if (sniperPct >= 10) score -= 4;
+  if (top10 >= 50) score -= 8;
+  else if (top10 >= 35) score -= 4;
+  if (Number(mc || 0) >= 100000) score += 6;
+  if (Number(mc || 0) >= 1000000) score += 4;
+  if (L && L.score != null) score = Math.round(score * 0.55 + Number(L.score) * 0.45);
+  score = Math.max(0, Math.min(100, Math.round(score)));
+
+  let grade = "WEAK";
+  let gradeColor = "#ff4d4d";
+  if (score >= 75) { grade = "STRONG"; gradeColor = "#22ff66"; }
+  else if (score >= 55) { grade = "MIXED"; gradeColor = "#ffcc33"; }
+  else if (score >= 40) { grade = "CAUTION"; gradeColor = "#ff8833"; }
+
+  const ogLabel = ogTag === "OG" ? "OG" : ogTag === "VAMP" ? "VAMP" : "CHECK";
+  const ogColor = ogTag === "OG" ? "#22ff66" : ogTag === "VAMP" ? "#b388ff" : "#9aa3ad";
+
+  const { createCanvas } = require("@napi-rs/canvas");
+  const font = await registerPnlFonts();
+  const W = 900;
+  const H = 1100;
+  const canvas = createCanvas(W, H);
+  const g = canvas.getContext("2d");
+
+  // background
+  g.fillStyle = "#0b0e13";
+  g.fillRect(0, 0, W, H);
+  const bg = g.createLinearGradient(0, 0, W, H);
+  bg.addColorStop(0, "#10141c");
+  bg.addColorStop(0.55, "#0b0e13");
+  bg.addColorStop(1, "#121018");
+  g.fillStyle = bg;
+  g.fillRect(0, 0, W, H);
+
+  // header card
+  roundRectPath(g, 28, 28, W - 56, 210, 22);
+  g.fillStyle = "#151a22";
+  g.fill();
+  g.strokeStyle = "#2a3140";
+  g.lineWidth = 2;
+  g.stroke();
+
+  drawVexLogo(g, 52, 48, 64);
+  g.font = "bold 42px " + font;
+  g.fillStyle = "#ffffff";
+  g.fillText("VE", 130, 92);
+  const veW = g.measureText("VE").width;
+  g.fillStyle = "#ff2a2a";
+  g.fillText("X", 130 + veW, 92);
+  const xW = g.measureText("X").width;
+  g.fillStyle = "#ffffff";
+  g.fillText("LORE", 130 + veW + xW, 92);
+
+  g.font = "bold 20px " + font;
+  g.fillStyle = "#8b95a2";
+  g.fillText("TOKEN ANALYSIS", 130, 124);
+
+  g.font = "bold 36px " + font;
+  g.fillStyle = "#ffffff";
+  g.fillText(fitText(g, (symbol ? "$" + symbol : "TOKEN") + (name ? "  ·  " + name : ""), 520), 52, 178);
+
+  g.font = "bold 18px " + font;
+  g.fillStyle = "#6b7380";
+  g.fillText(fitText(g, ca, 520), 52, 210);
+
+  // score ring
+  const cx = 760;
+  const cy = 130;
+  const r = 72;
+  g.beginPath();
+  g.arc(cx, cy, r, 0, Math.PI * 2);
+  g.strokeStyle = "#222833";
+  g.lineWidth = 12;
+  g.stroke();
+  const pctScore = score / 100;
+  g.beginPath();
+  g.arc(cx, cy, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * pctScore);
+  g.strokeStyle = gradeColor;
+  g.lineWidth = 12;
+  g.lineCap = "round";
+  g.stroke();
+  g.font = "bold 40px " + font;
+  g.fillStyle = "#ffffff";
+  g.textAlign = "center";
+  g.fillText(String(score), cx, cy + 8);
+  g.font = "bold 16px " + font;
+  g.fillStyle = gradeColor;
+  g.fillText(grade, cx, cy + 36);
+  g.textAlign = "left";
+
+  // metric rows
+  function row(y, label, value, valueColor) {
+    roundRectPath(g, 28, y, W - 56, 64, 14);
+    g.fillStyle = "#12171f";
+    g.fill();
+    g.strokeStyle = "#222833";
+    g.lineWidth = 1.5;
+    g.stroke();
+    g.font = "bold 22px " + font;
+    g.fillStyle = "#8b95a2";
+    g.fillText(label, 52, y + 40);
+    g.fillStyle = valueColor || "#ffffff";
+    g.textAlign = "right";
+    g.fillText(fitText(g, String(value), 420), W - 52, y + 40);
+    g.textAlign = "left";
+  }
+
+  let y = 260;
+  row(y, "OG status", ogLabel, ogColor); y += 76;
+  row(y, "Market cap", moneyMkt(mc)); y += 76;
+  row(y, "Liquidity", moneyMkt(q.liq)); y += 76;
+  row(y, "Volume 24h", moneyMkt(q.vol)); y += 76;
+  row(y, "Bundles now", bPct.toFixed(1) + "%", bPct >= 15 ? "#ff4d4d" : "#22ff66"); y += 76;
+  row(y, "Snipers / Insiders", sniperPct.toFixed(1) + "% / " + insiderPct.toFixed(1) + "%"); y += 76;
+  row(y, "Top 10 holders", top10.toFixed(1) + "%", top10 >= 40 ? "#ff8833" : "#ffffff"); y += 76;
+  row(y, "Dex paid", paidLabel, profilePaid ? "#22ff66" : "#ff4d4d"); y += 76;
+  row(y, "Boosts", boosts); y += 76;
+  row(y, "Lore score", (L.score != null ? L.score : "?") + "/100  " + (L.verdict || ""), gradeColor); y += 76;
+
+  // footer notes
+  roundRectPath(g, 28, y, W - 56, 120, 14);
+  g.fillStyle = "#12171f";
+  g.fill();
+  g.strokeStyle = "#222833";
+  g.lineWidth = 1.5;
+  g.stroke();
+  g.font = "bold 20px " + font;
+  g.fillStyle = "#8b95a2";
+  g.fillText("Quick notes", 52, y + 36);
+  g.font = "bold 18px " + font;
+  g.fillStyle = "#d7dde6";
+  const notes = (L.notes && L.notes.length ? L.notes.join(" · ") : "No lore notes") +
+    (fam.og && !fam.isOg ? " · OG " + short(fam.og.mint) : "");
+  g.fillText(fitText(g, notes, W - 120), 52, y + 68);
+  g.font = "bold 16px " + font;
+  g.fillStyle = "#6b7380";
+  g.fillText("Made by Robin with Love  ·  Always DYOR", 52, y + 98);
+
+  return { buffer: canvas.toBuffer("image/png"), score, grade, ogTag };
+}
+
+function analysisKeyboard(ca) {
+  return new InlineKeyboard()
+    .text("🔄 Refresh", "analysisref:" + ca)
+    .text("🧛 Vamp", "vamp:" + ca)
+    .text("🗑 Delete", "del");
+}
+
 function pnlKeyboard(ca) {
   return new InlineKeyboard()
     .text("🔄 Refresh", "pnlref:" + ca)
@@ -5985,6 +6313,18 @@ const GM_QUOTES = [
   "Strong days are built before the candle prints.",
   "Stay humble in wins. Stay calm in red.",
   "Build the habit. The result follows.",
+  "Scan twice. Call once. Live with the size.",
+  "Liquidity is a language. Learn to read it.",
+  "OG first. Narrative second. FOMO last.",
+  "Your edge is process, not prediction.",
+  "Green candles do not equal good process.",
+  "Slow is smooth. Smooth is fast in this market.",
+  "Cut noise. Keep signal. Protect attention.",
+  "Today's patience is tomorrow's position.",
+  "Risk small. Think big. Sleep well.",
+  "Charts lie less when ego is quiet.",
+  "Call clean. Exit cleaner. Journal always.",
+  "The market pays discipline, not urgency.",
 ];
 
 async function maybeSendGm() {
@@ -6001,10 +6341,20 @@ async function maybeSendGm() {
 
   for (const g of groups) {
     const title = g.title || "this group";
+    const extras = [
+      "Scan clean. Call clean. Stay sharp.",
+      "OG check before size. Always.",
+      "Protect capital. Hunt narrative.",
+      "Read holders. Read lore. Then act.",
+      "Dex paid is not safety. Process is.",
+      "Vamps copy tickers. You copy process.",
+    ];
+    const extra = extras[now.getUTCDate() % extras.length];
     const text =
       "☀️ <b>GM " + esc(title) + "</b>\n\n" +
       esc(quote) + "\n\n" +
-      "Scan clean. Call clean. Stay sharp." +
+      esc(extra) + "\n" +
+      "Have a focused session." +
       FOOTER;
     try {
       await bot.api.sendMessage(g.id, text, {
@@ -8270,7 +8620,8 @@ const WELCOME =
   "• /wallet name.sol → wallet analyser\n" +
   "• /stonks CA → pad check\n" +
   "• /lb → group leaderboard\n" +
-  "• /pnl CA → PnL card\n\n" +
+  "• /pnl CA → PnL card\n" +
+  "• /analysis CA → full score sheet\n\n" +
   "🟠 <b>Other chains</b>\n" +
   "Paste a 0x and I auto-detect.\n" +
   "Or pick one:\n" +
@@ -8328,6 +8679,52 @@ bot.command("pnl", async (ctx) => {
         (e && e.message ? e.message : "install @napi-rs/canvas") +
         FOOTER
     );
+  }
+});
+
+bot.command("analysis", async (ctx) => {
+  const ca = extractCa(ctx.match || ctx.message.text);
+  if (!isCa(ca) || isEvmCa(ca)) {
+    return ctx.reply("Usage: /analysis CA   (Solana only)");
+  }
+  touchGroup(ctx.chat);
+  const loading = await ctx.reply("🧠 Building analysis card...");
+  try {
+    const card = await buildAnalysisCard(ca);
+    if (card.error) {
+      await ctx.api.editMessageText(ctx.chat.id, loading.message_id, card.error, {
+        parse_mode: "HTML",
+        link_preview_options: { is_disabled: true },
+      });
+      return;
+    }
+    await ctx.api.deleteMessage(ctx.chat.id, loading.message_id).catch(() => {});
+    const sent = await ctx.replyWithPhoto(new InputFile(card.buffer, "vexlore-analysis.png"), {
+      caption:
+        "🧠 <b>VEXLORE analysis</b> · score " +
+        card.score +
+        "/100 · " +
+        esc(card.grade) +
+        " · " +
+        esc(card.ogTag) +
+        "\n<code>" +
+        esc(ca) +
+        "</code>" +
+        FOOTER,
+      parse_mode: "HTML",
+      reply_markup: analysisKeyboard(ca),
+    });
+    rememberOwner(ctx.chat.id, sent.message_id, ctx.from && ctx.from.id);
+  } catch (e) {
+    try {
+      await ctx.api.editMessageText(
+        ctx.chat.id,
+        loading.message_id,
+        "Analysis card failed: " + (e && e.message ? e.message : "install @napi-rs/canvas") + FOOTER
+      );
+    } catch (_) {
+      await ctx.reply("Analysis card failed: " + (e && e.message ? e.message : "fail") + FOOTER);
+    }
   }
 });
 
@@ -8871,6 +9268,29 @@ bot.callbackQuery(/^pnlref:(.+)$/, async (ctx) => {
         media: new InputFile(card.buffer, "vexlore-pnl.png"),
       },
       { reply_markup: pnlKeyboard(ca) }
+    );
+  } catch (_) {
+    await ctx.answerCallbackQuery({ text: "failed" });
+  }
+});
+
+bot.callbackQuery(/^analysisref:(.+)$/, async (ctx) => {
+  const ca = ctx.match[1];
+  await ctx.answerCallbackQuery({ text: "Refreshing analysis..." });
+  try {
+    const card = await buildAnalysisCard(ca);
+    if (card.error) {
+      await ctx.answerCallbackQuery({ text: "failed", show_alert: true });
+      return;
+    }
+    await ctx.editMessageMedia(
+      {
+        type: "photo",
+        media: new InputFile(card.buffer, "vexlore-analysis.png"),
+      },
+      {
+        reply_markup: analysisKeyboard(ca),
+      }
     );
   } catch (_) {
     await ctx.answerCallbackQuery({ text: "failed" });
