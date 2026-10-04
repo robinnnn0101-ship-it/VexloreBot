@@ -6333,20 +6333,20 @@ async function buildAnalysisCard(ca) {
   } catch (_) {
     font = "sans-serif";
   }
-  const W = 920;
-  const H = 1180;
+  const W = 960;
+  const H = 1280;
   const canvas = createCanvas(W, H);
   const g = canvas.getContext("2d");
 
-  // deep gradient background
+  // ── premium dark gradient ──
   const bg = g.createLinearGradient(0, 0, W, H);
-  bg.addColorStop(0, "#0a0c12");
-  bg.addColorStop(0.45, "#10131c");
-  bg.addColorStop(1, "#160b14");
+  bg.addColorStop(0, "#07090f");
+  bg.addColorStop(0.35, "#0d111a");
+  bg.addColorStop(0.7, "#12101c");
+  bg.addColorStop(1, "#1a0c14");
   g.fillStyle = bg;
   g.fillRect(0, 0, W, H);
 
-  // soft glow blobs
   function glow(x, y, r, color) {
     const grd = g.createRadialGradient(x, y, 0, x, y, r);
     grd.addColorStop(0, color);
@@ -6356,167 +6356,202 @@ async function buildAnalysisCard(ca) {
     g.arc(x, y, r, 0, Math.PI * 2);
     g.fill();
   }
-  glow(160, 120, 220, "rgba(255,42,42,0.18)");
-  const gradeGlow =
-    gradeColor === "#22ff66"
-      ? "rgba(34,255,102,0.16)"
-      : gradeColor === "#ffcc33"
-      ? "rgba(255,204,51,0.16)"
-      : gradeColor === "#ff8833"
-      ? "rgba(255,136,51,0.16)"
-      : "rgba(255,77,77,0.16)";
-  glow(780, 180, 260, gradeGlow);
-  glow(460, 980, 280, "rgba(120,80,255,0.12)");
+  glow(120, 100, 260, "rgba(255,42,72,0.22)");
+  glow(820, 160, 280, gradeColor === "#22ff66" ? "rgba(34,255,102,0.18)" : gradeColor === "#ffcc33" ? "rgba(255,204,51,0.16)" : gradeColor === "#ff8833" ? "rgba(255,136,51,0.14)" : "rgba(255,60,60,0.16)");
+  glow(480, 1100, 320, "rgba(120,80,255,0.14)");
+  glow(200, 700, 180, "rgba(77,163,255,0.08)");
 
-  // header panel
-  roundRectPath(g, 24, 24, W - 48, 230, 24);
-  const head = g.createLinearGradient(24, 24, W - 24, 254);
-  head.addColorStop(0, "#161b26");
-  head.addColorStop(1, "#1a1220");
+  // subtle grid
+  g.strokeStyle = "rgba(255,255,255,0.03)";
+  g.lineWidth = 1;
+  for (let gx = 40; gx < W; gx += 40) {
+    g.beginPath(); g.moveTo(gx, 0); g.lineTo(gx, H); g.stroke();
+  }
+  for (let gy = 40; gy < H; gy += 40) {
+    g.beginPath(); g.moveTo(0, gy); g.lineTo(W, gy); g.stroke();
+  }
+
+  // ── HEADER CARD ──
+  roundRectPath(g, 28, 28, W - 56, 248, 28);
+  const head = g.createLinearGradient(28, 28, W - 28, 276);
+  head.addColorStop(0, "rgba(22,28,40,0.96)");
+  head.addColorStop(1, "rgba(28,16,32,0.96)");
   g.fillStyle = head;
   g.fill();
-  g.strokeStyle = "rgba(255,255,255,0.08)";
+  g.strokeStyle = "rgba(255,255,255,0.10)";
   g.lineWidth = 2;
   g.stroke();
+  // inner highlight line
+  g.strokeStyle = "rgba(255,255,255,0.04)";
+  g.lineWidth = 1;
+  roundRectPath(g, 30, 30, W - 60, 244, 26);
+  g.stroke();
 
-  drawVexLogo(g, 48, 48, 70);
-  g.font = "bold 46px " + font;
+  drawVexLogo(g, 52, 52, 76);
+  g.font = "bold 48px " + font;
   g.fillStyle = "#ffffff";
-  g.fillText("VE", 136, 96);
+  g.fillText("VE", 144, 102);
   const veW = g.measureText("VE").width;
-  g.fillStyle = "#ff2a2a";
-  g.fillText("X", 136 + veW, 96);
+  g.fillStyle = "#ff2a4a";
+  g.fillText("X", 144 + veW, 102);
   const xW = g.measureText("X").width;
   g.fillStyle = "#ffffff";
-  g.fillText("LORE", 136 + veW + xW, 96);
+  g.fillText("LORE", 144 + veW + xW, 102);
 
-  g.font = "bold 18px " + font;
-  g.fillStyle = "#8b95a2";
-  g.fillText("TOKEN ANALYSIS  ·  LIVE SHEET", 136, 128);
+  g.font = "bold 16px " + font;
+  g.fillStyle = "#7a8494";
+  g.fillText("TOKEN ANALYSIS  ·  LIVE SCORE SHEET", 144, 132);
 
-  g.font = "bold 38px " + font;
+  g.font = "bold 40px " + font;
   g.fillStyle = "#ffffff";
-  g.fillText(fitText(g, (symbol ? "$" + symbol : "TOKEN") + (name ? "  ·  " + name : ""), 500), 48, 180);
+  g.fillText(fitText(g, (symbol ? "$" + symbol : "TOKEN") + (name ? "  ·  " + name : ""), 520), 52, 188);
 
-  g.font = "bold 17px " + font;
-  g.fillStyle = "#6b7380";
-  g.fillText(fitText(g, ca, 500), 48, 212);
+  g.font = "bold 15px " + font;
+  g.fillStyle = "#5c6570";
+  g.fillText(fitText(g, ca, 520), 52, 220);
 
-  // score ring with outer glow
-  const cx = 780;
-  const cy = 138;
-  const r = 78;
+  // ── SCORE RING ──
+  const cx = 820;
+  const cy = 152;
+  const r = 86;
+  // outer glow ring
   g.beginPath();
-  g.arc(cx, cy, r + 8, 0, Math.PI * 2);
-  g.strokeStyle = "rgba(255,255,255,0.05)";
-  g.lineWidth = 16;
+  g.arc(cx, cy, r + 12, 0, Math.PI * 2);
+  g.strokeStyle = "rgba(255,255,255,0.04)";
+  g.lineWidth = 20;
   g.stroke();
+  // track
   g.beginPath();
   g.arc(cx, cy, r, 0, Math.PI * 2);
-  g.strokeStyle = "#222833";
-  g.lineWidth = 14;
+  g.strokeStyle = "#1c2230";
+  g.lineWidth = 16;
   g.stroke();
+  // score arc
   const pctScore = score / 100;
   g.beginPath();
   g.arc(cx, cy, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * pctScore);
   g.strokeStyle = gradeColor;
-  g.lineWidth = 14;
+  g.lineWidth = 16;
   g.lineCap = "round";
   g.stroke();
-  g.font = "bold 48px " + font;
+  // center
+  g.font = "bold 52px " + font;
   g.fillStyle = "#ffffff";
   g.textAlign = "center";
-  g.fillText(String(score), cx, cy + 6);
-  g.font = "bold 18px " + font;
+  g.fillText(String(score), cx, cy + 8);
+  g.font = "bold 17px " + font;
   g.fillStyle = gradeColor;
-  g.fillText(grade, cx, cy + 38);
+  g.fillText(grade, cx, cy + 40);
   g.textAlign = "left";
 
-  // pill helper
+  // ── STATUS PILLS ──
   function pill(x, y, w, h, text, bgc, fgc) {
-    roundRectPath(g, x, y, w, h, 12);
+    roundRectPath(g, x, y, w, h, 14);
     g.fillStyle = bgc;
     g.fill();
-    g.font = "bold 18px " + font;
+    g.strokeStyle = fgc.replace(")", ",0.35)").replace("rgb", "rgba").replace("#", "");
+    // soft border
+    g.strokeStyle = "rgba(255,255,255,0.08)";
+    g.lineWidth = 1.5;
+    g.stroke();
+    g.font = "bold 17px " + font;
     g.fillStyle = fgc;
     g.textAlign = "center";
     g.fillText(text, x + w / 2, y + h / 2 + 6);
     g.textAlign = "left";
   }
-
-  // status pills under header
-  let px = 48;
-  const py = 270;
-  const ogBg = ogTag === "OG" ? "rgba(34,255,102,0.18)" : ogTag === "VAMP" ? "rgba(179,136,255,0.18)" : "rgba(154,163,173,0.18)";
+  let px = 52;
+  const py = 296;
+  const ogBg = ogTag === "OG" ? "rgba(34,255,102,0.20)" : ogTag === "VAMP" ? "rgba(179,136,255,0.22)" : "rgba(154,163,173,0.18)";
   const gradeBg =
-    grade === "STRONG"
-      ? "rgba(34,255,102,0.18)"
-      : grade === "MIXED"
-      ? "rgba(255,204,51,0.18)"
-      : grade === "CAUTION"
-      ? "rgba(255,136,51,0.18)"
-      : "rgba(255,77,77,0.18)";
-  pill(px, py, 110, 36, ogLabel, ogBg, ogColor);
-  px += 122;
-  pill(px, py, 130, 36, grade, gradeBg, gradeColor);
-  px += 142;
-  pill(px, py, profilePaid ? 150 : 130, 36, profilePaid ? "DEX PAID" : "DEX FREE", profilePaid ? "rgba(34,255,102,0.18)" : "rgba(255,77,77,0.18)", profilePaid ? "#22ff66" : "#ff4d4d");
+    grade === "STRONG" ? "rgba(34,255,102,0.20)" :
+    grade === "MIXED" ? "rgba(255,204,51,0.20)" :
+    grade === "CAUTION" ? "rgba(255,136,51,0.20)" : "rgba(255,77,77,0.20)";
+  pill(px, py, 118, 38, ogLabel, ogBg, ogColor); px += 130;
+  pill(px, py, 136, 38, grade, gradeBg, gradeColor); px += 148;
+  pill(px, py, profilePaid ? 152 : 136, 38, profilePaid ? "DEX PAID" : "DEX FREE",
+    profilePaid ? "rgba(34,255,102,0.20)" : "rgba(255,77,77,0.18)",
+    profilePaid ? "#22ff66" : "#ff4d4d");
 
-  function row(y, label, value, valueColor, accent) {
-    roundRectPath(g, 24, y, W - 48, 62, 16);
-    g.fillStyle = "rgba(18,22,30,0.92)";
+  // ── METRIC ROWS with mini bars ──
+  function metricRow(y, label, value, valueColor, accent, barPct) {
+    roundRectPath(g, 28, y, W - 56, 68, 18);
+    g.fillStyle = "rgba(14,18,26,0.94)";
     g.fill();
     g.strokeStyle = "rgba(255,255,255,0.06)";
     g.lineWidth = 1.5;
     g.stroke();
-    if (accent) {
-      g.fillStyle = accent;
-      g.fillRect(24, y + 10, 5, 42);
-    }
-    g.font = "bold 21px " + font;
+    // accent bar
+    g.fillStyle = accent;
+    g.fillRect(28, y + 12, 6, 44);
+    // label
+    g.font = "bold 20px " + font;
     g.fillStyle = "#8b95a2";
-    g.fillText(label, 48, y + 40);
+    g.fillText(label, 52, y + 32);
+    // value
+    g.font = "bold 22px " + font;
     g.fillStyle = valueColor || "#ffffff";
     g.textAlign = "right";
-    g.fillText(fitText(g, String(value), 440), W - 48, y + 40);
+    g.fillText(fitText(g, String(value), 420), W - 52, y + 32);
     g.textAlign = "left";
+    // mini progress bar
+    if (barPct != null && Number.isFinite(barPct)) {
+      const bw = W - 120;
+      const bx = 52;
+      const by = y + 48;
+      g.fillStyle = "rgba(255,255,255,0.06)";
+      roundRectPath(g, bx, by, bw, 8, 4);
+      g.fill();
+      const fill = Math.max(0, Math.min(1, barPct / 100));
+      if (fill > 0) {
+        const barG = g.createLinearGradient(bx, by, bx + bw * fill, by);
+        barG.addColorStop(0, accent);
+        barG.addColorStop(1, valueColor || accent);
+        g.fillStyle = barG;
+        roundRectPath(g, bx, by, Math.max(8, bw * fill), 8, 4);
+        g.fill();
+      }
+    }
   }
 
-  let y = 324;
-  row(y, "Market cap", moneyMkt(mc), "#ffffff", "#4da3ff"); y += 70;
-  row(y, "Liquidity / Vol 24h", moneyMkt(q.liq) + "  ·  " + moneyMkt(q.vol), "#ffffff", "#4da3ff"); y += 70;
-  row(y, "Bundles now", bPct.toFixed(1) + "%", bPct >= 15 ? "#ff4d4d" : "#22ff66", bPct >= 15 ? "#ff4d4d" : "#22ff66"); y += 70;
-  row(y, "Snipers / Insiders", sniperPct.toFixed(1) + "% / " + insiderPct.toFixed(1) + "%", "#ffffff", "#ff8833"); y += 70;
-  row(y, "Top 10 holders", (top10 > 0 ? top10.toFixed(1) + "%" : "n/a") + (holderData.total != null ? "  ·  count " + holderData.total : ""), top10 >= 40 ? "#ff8833" : "#ffffff", "#b388ff"); y += 70;
-  row(y, "Dex paid / Boosts", paidLabel + "  ·  boosts " + boosts, profilePaid ? "#22ff66" : "#ff4d4d", profilePaid ? "#22ff66" : "#ff4d4d"); y += 70;
-  row(y, "Lore score", (L.score != null ? L.score : "?") + "/100  " + (L.verdict || ""), gradeColor, gradeColor); y += 78;
+  let y = 354;
+  metricRow(y, "Market cap", moneyMkt(mc), "#ffffff", "#4da3ff", Math.min(100, Number(mc || 0) / 50000)); y += 78;
+  metricRow(y, "Liquidity / Vol 24h", moneyMkt(q.liq) + "  ·  " + moneyMkt(q.vol), "#e8ecf2", "#4da3ff", Math.min(100, Number(q.liq || 0) / 20000)); y += 78;
+  metricRow(y, "Bundles now", bPct.toFixed(1) + "%", bPct >= 15 ? "#ff4d4d" : "#22ff66", bPct >= 15 ? "#ff4d4d" : "#22ff66", Math.min(100, bPct)); y += 78;
+  metricRow(y, "Snipers / Insiders", sniperPct.toFixed(1) + "% / " + insiderPct.toFixed(1) + "%", "#ffffff", "#ff8833", Math.min(100, sniperPct + insiderPct)); y += 78;
+  metricRow(y, "Top 10 holders", (top10 > 0 ? top10.toFixed(1) + "%" : "n/a") + (holderData.total != null ? "  ·  count " + holderData.total : ""), top10 >= 40 ? "#ff8833" : "#ffffff", "#b388ff", Math.min(100, top10)); y += 78;
+  metricRow(y, "Dex paid / Boosts", paidLabel + "  ·  boosts " + boosts, profilePaid ? "#22ff66" : "#ff4d4d", profilePaid ? "#22ff66" : "#ff4d4d", profilePaid ? 100 : 8); y += 78;
+  metricRow(y, "Lore score", (L.score != null ? L.score : "?") + "/100  " + (L.verdict || ""), gradeColor, gradeColor, Number(L.score) || 0); y += 86;
 
-  // lore story panel
-  roundRectPath(g, 24, y, W - 48, 200, 18);
-  const loreBg = g.createLinearGradient(24, y, 24, y + 200);
-  loreBg.addColorStop(0, "rgba(28,18,36,0.95)");
-  loreBg.addColorStop(1, "rgba(16,18,28,0.95)");
+  // ── LORE STORY PANEL ──
+  roundRectPath(g, 28, y, W - 56, 220, 22);
+  const loreBg = g.createLinearGradient(28, y, 28, y + 220);
+  loreBg.addColorStop(0, "rgba(36,22,48,0.97)");
+  loreBg.addColorStop(1, "rgba(16,18,28,0.97)");
   g.fillStyle = loreBg;
   g.fill();
-  g.strokeStyle = "rgba(179,136,255,0.25)";
+  g.strokeStyle = "rgba(179,136,255,0.32)";
   g.lineWidth = 2;
   g.stroke();
 
-  g.font = "bold 22px " + font;
-  g.fillStyle = "#b388ff";
-  g.fillText("🧠  What is this token?", 48, y + 40);
+  // purple accent corner
+  g.fillStyle = "rgba(179,136,255,0.15)";
+  g.fillRect(28, y, 8, 220);
 
-  g.font = "bold 20px " + font;
+  g.font = "bold 22px " + font;
+  g.fillStyle = "#c9a8ff";
+  g.fillText("What is this token?", 56, y + 42);
+
+  g.font = "bold 19px " + font;
   g.fillStyle = "#e8ecf2";
   const story = String(L.story || L.desc || "No lore yet.").replace(/\s+/g, " ").trim();
-  // simple word wrap
   const words = story.split(" ");
   let line = "";
-  let ly = y + 78;
+  let ly = y + 80;
   for (const w of words) {
     const test = line ? line + " " + w : w;
-    if (g.measureText(test).width > W - 110) {
-      g.fillText(line, 48, ly);
+    if (g.measureText(test).width > W - 120) {
+      g.fillText(line, 56, ly);
       ly += 28;
       line = w;
       if (ly > y + 160) break;
@@ -6524,21 +6559,22 @@ async function buildAnalysisCard(ca) {
       line = test;
     }
   }
-  if (line && ly <= y + 170) g.fillText(line, 48, ly);
+  if (line && ly <= y + 168) g.fillText(line, 56, ly);
 
-  g.font = "bold 16px " + font;
+  g.font = "bold 15px " + font;
   g.fillStyle = "#6b7380";
-  g.fillText(
+  const noteLine =
     (L.notes && L.notes.length ? L.notes.join(" · ") : "—") +
-      (fam.og && !fam.isOg ? "  ·  OG " + short(fam.og.mint) : ""),
-    48,
-    y + 188
-  );
+    (fam.og && !fam.isOg ? "  ·  OG " + short(fam.og.mint) : "");
+  g.fillText(fitText(g, noteLine, W - 120), 56, y + 200);
 
-  y += 220;
-  g.font = "bold 16px " + font;
-  g.fillStyle = "#5a6370";
-  g.fillText("Made by Robin with Love   ·   Always DYOR   ·   VEXLORE", 48, y);
+  y += 240;
+  // footer
+  g.font = "bold 15px " + font;
+  g.fillStyle = "#4a5260";
+  g.textAlign = "center";
+  g.fillText("Made by Robin with Love   ·   Always DYOR   ·   VEXLORE", W / 2, y);
+  g.textAlign = "left";
 
   try {
     return { buffer: canvas.toBuffer("image/png"), score, grade, ogTag };
@@ -6552,11 +6588,15 @@ async function buildAnalysisCard(ca) {
   }
 }
 
+
+
 function analysisKeyboard(ca) {
   return new InlineKeyboard()
     .text("🔄 Refresh", "analysisref:" + ca)
     .text("🧛 Vamp", "vamp:" + ca)
-    .text("🗑 Delete", "del");
+    .text("🗑 Delete", "del")
+    .row()
+    .text("📢 Advertise on VEXLORE", "advertise");
 }
 
 function pnlKeyboard(ca) {
@@ -7398,66 +7438,83 @@ async function buildReport(ca) {
     }
   } catch (_) {}
 
-  const marketBody =
-    "MC " + moneyMkt(mc) + " · FDV " + moneyMkt(q.fdv) + "\n" +
-    "💧 Liq " + moneyMkt(q.liq) + " · 📊 Vol24 " + moneyMkt(q.vol) + "\n" +
-    pnlLine;
-
-  const launchBody =
-    "Pump: " + utc(toDate(pump && pump.created_timestamp)) + "\n" +
-    "Pair: " + utc(toDate(pair && pair.pairCreatedAt)) + "\n" +
-    esc(ogLine(fam));
-
-  const bundleBody =
-    esc(bundleBlock) + "\n" +
-    "🎯 Snipers " + sniperPct.toFixed(1) + "% · Insiders " + insiderPct.toFixed(1) + "%";
-
-  const holderBody = ST_KEY
-    ? (
-        hLines.length
-          ? esc(holderCountLine + hLines.join("\n")) +
-            "\n⏱ avg hold " +
-            (avgHold == null ? "n/a" : holdHuman(avgHold)) +
-            " · avg PnL " +
-            (avgPnl == null ? "n/a" : money(avgPnl))
-          : esc(holderCountLine || "") +
-            "Holders not indexed yet (retry refresh) · count " +
-            (holderData.total != null ? String(holderData.total) : "n/a")
-      )
-    : "add SOLANA_TRACKER_KEY for holders";
-
   const boostsN = pair && pair.boosts && pair.boosts.active;
-  const paidBody =
-    paidBlock +
-    (boostsN != null && Number(boostsN) > 0 ? " · 🚀 " + boostsN : "");
+  const paidShort =
+    !paid || !paid.ok
+      ? "Dex n/a"
+      : paid.profilePaid || paid.adPaid
+      ? "Dex paid"
+      : "Dex free";
+  const boostsShort =
+    boostsN != null && Number(boostsN) > 0 ? " · 🚀" + boostsN : "";
 
-  // Compact social marks (no full URLs) — creation + dex profile links
-  const socialRow = compactSocials(pump, pair, ca);
-  // Optional short X pulse only when bearer works and posts exist (no ugly fallback text)
-  let xPulseLine = "";
-  if (X_BEARER && x && !/set X_BEARER|X API|no recent X posts|X lookup failed/i.test(x)) {
-    xPulseLine = "\n" + esc(String(x).split("\n").slice(0, 4).join(" · "));
+  const top10Pct = (holderData.list || [])
+    .slice(0, 10)
+    .reduce((s, h) => s + Number(h.percentage || 0), 0);
+
+  let holdersSummary = "n/a";
+  if (ST_KEY) {
+    const top3 = hLines.slice(0, 3).join(" · ");
+    const rest = holderData.total != null ? " · " + holderData.total + " holders" : "";
+    holdersSummary =
+      (top10Pct > 0 ? "Top10 " + top10Pct.toFixed(1) + "%" : "Top10 n/a") +
+      rest +
+      (avgHold != null ? " · avg hold " + holdHuman(avgHold) : "") +
+      (avgPnl != null ? " · avg PnL " + money(avgPnl) : "");
+    if (top3) holdersSummary += "\n" + top3;
+  } else {
+    holdersSummary = "add SOLANA_TRACKER_KEY";
   }
 
-  const loreBody =
-    L.score + "/100  " + esc(L.verdict) + "\n" +
-    esc(L.story || L.desc || "No description.") + "\n" +
-    esc((L.notes || []).join(" · "));
+  const socialRow = compactSocials(pump, pair, ca);
+  let xPulseLine = "";
+  if (X_BEARER && x && !/set X_BEARER|X API|no recent X posts|X lookup failed/i.test(x)) {
+    xPulseLine = "\n" + esc(String(x).split("\n").slice(0, 2).join(" · "));
+  }
+
+  // VAMP/OG: single clear mark — full family only on Vamp button
+  let originLine = "";
+  if (ogTag === "VAMP") {
+    originLine =
+      "🟣 <b>VAMP</b> of existing name/ticker" +
+      (fam.og && fam.og.mint ? " · OG <code>" + esc(short(fam.og.mint)) + "</code>" : "") +
+      " · tap <b>Vamp</b> for family";
+  } else if (ogTag === "OG") {
+    originLine = "🟢 <b>OG</b> deploy";
+  } else {
+    originLine = "⚪ Origin unclear · tap <b>Vamp</b> to check";
+  }
+
+  let locksLine = "";
+  try {
+    const b = buildLocksBlock(locks);
+    if (b && String(b).trim() && !/n\/a|none|no lock|not found/i.test(b)) {
+      locksLine = b + "\n";
+    }
+  } catch (_) {}
 
   return (
-    badge + "  <b>" + esc(name) + " (" + esc(symbol) + ")</b>\n" +
-    "<code>" + esc(ca) + "</code>\n\n" +
-    boxSection("💰 Market", marketBody) + "\n" +
-    boxSection("🕐 Launch UTC", launchBody) + "\n" +
-    boxSection("📦 Bundles", bundleBody) + "\n" +
-    buildLocksBlock(locks) + "\n" +
-    boxSection("👛 Top holders", holderBody) + "\n" +
-    boxSection("🧾 Dex", paidBody) +
-    "\n" + socialRow + xPulseLine + "\n" +
-    boxSection("🧠 Lore", loreBody) +
+    badge + "  <b>" + esc(name) + " ($" + esc(symbol) + ")</b>\n" +
+    "<code>" + esc(ca) + "</code>\n" +
+    originLine + "\n\n" +
+    "💰 <b>Market</b>  " + moneyMkt(mc) + " MC · " + moneyMkt(q.liq) + " liq · " + moneyMkt(q.vol) + " vol24" +
+    (q.fdv ? " · FDV " + moneyMkt(q.fdv) : "") + "\n" +
+    (pnlLine ? pnlLine : "") +
+    "🕐 Pump " + utc(toDate(pump && pump.created_timestamp)) +
+    " · Pair " + utc(toDate(pair && pair.pairCreatedAt)) + "\n\n" +
+    "📦 Bundles  " + Number(bPct || 0).toFixed(1) + "% now · " + Number(bInit || 0).toFixed(1) + "% launch · " + parsedB.totalW + " wallets\n" +
+    "🎯 Snipers " + sniperPct.toFixed(1) + "% · Insiders " + insiderPct.toFixed(1) + "%\n" +
+    locksLine +
+    "👛 " + esc(holdersSummary) + "\n" +
+    "🧾 " + paidShort + boostsShort + "\n" +
+    socialRow + xPulseLine + "\n\n" +
+    "🧠 Lore " + L.score + "/100 " + esc(L.verdict) + "\n" +
+    esc((L.story || L.desc || "No description.").slice(0, 180)) +
+    (L.notes && L.notes.length ? "\n" + esc(L.notes.slice(0, 4).join(" · ")) : "") +
     FOOTER
   ).slice(0, 4000);
 }
+
 
 async function buildVamp(ca) {
   const pump = await pumpCoin(ca);
@@ -8905,7 +8962,9 @@ const kb = (ca) =>
     .text("📈 Stonks", "sf:" + ca)
     .row()
     .text("🧠 Analysis", "analysis:" + ca)
-    .text("🗑 Delete", "del");
+    .text("🗑 Delete", "del")
+    .row()
+    .text("📢 Advertise on VEXLORE", "advertise");
 
 const kbRh = (ca) =>
   new InlineKeyboard()
@@ -8918,7 +8977,9 @@ const kbRh = (ca) =>
     .text("🧠 Lore", "rhlore:" + ca)
     .row()
     .text("📈 Stonks", "rhsf:" + ca)
-    .text("🗑 Delete", "del");
+    .text("🗑 Delete", "del")
+    .row()
+    .text("📢 Advertise on VEXLORE", "advertise");
 
 const kbArc = (ca) =>
   new InlineKeyboard()
@@ -8930,7 +8991,9 @@ const kbArc = (ca) =>
     .text("👛 Holders", "archold:" + ca)
     .text("🧠 Lore", "arclore:" + ca)
     .row()
-    .text("🗑 Delete", "del");
+    .text("🗑 Delete", "del")
+    .row()
+    .text("📢 Advertise on VEXLORE", "advertise");
 
 const kbGh = (id) =>
   new InlineKeyboard()
@@ -10063,6 +10126,24 @@ bot.callbackQuery(/^xref:(.+)$/, async (ctx) => {
   } catch (_) {
     await ctx.answerCallbackQuery({ text: "failed" });
   }
+});
+
+bot.callbackQuery(/^advertise$/, async (ctx) => {
+  await ctx.answerCallbackQuery({ text: "Coming soon" });
+  try {
+    await ctx.reply(
+      "📢 <b>Advertise on VEXLORE</b>\n\n" +
+        "Coming soon.\n\n" +
+        "Want to be first in line or need this service now?\n" +
+        "Join the community → <a href=\"https://t.me/VEXLORECOMM\">t.me/VEXLORECOMM</a>" +
+        FOOTER,
+      {
+        parse_mode: "HTML",
+        link_preview_options: { is_disabled: true },
+        reply_markup: new InlineKeyboard().url("💬 VEXLORE Community", "https://t.me/VEXLORECOMM"),
+      }
+    );
+  } catch (_) {}
 });
 
 bot.callbackQuery(/^del$/, async (ctx) => {
