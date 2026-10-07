@@ -10642,23 +10642,35 @@ async function callAiChat(messages) {
     return {
       ok: false,
       error:
-        "AI not configured. Set XAI_API_KEY (Grok) or OPENAI_API_KEY on the server, then restart.",
+        "AI not configured. Set OPENAI_API_KEY + AI_BASE_URL (or XAI_API_KEY), then restart.",
     };
   }
   const key = aiKey();
-  if (!key && !AI_BASE_URL) {
-    return { ok: false, error: "Missing AI API key." };
+  if (!key) {
+    return { ok: false, error: "Missing API key (OPENAI_API_KEY / XAI_API_KEY)." };
   }
+  const endpoint = aiEndpoint();
+  const model = aiModelName();
+  let host = endpoint;
   try {
-    const res = await fetch(aiEndpoint(), {
+    host = new URL(endpoint).host;
+  } catch (_) {}
+  try {
+    const headers = {
+      "Content-Type": "application/json",
+      Authorization: "Bearer " + key,
+      "User-Agent": "VEXLORE-Bot",
+    };
+    // OpenRouter asks for these optional headers
+    if (/openrouter\.ai/i.test(endpoint)) {
+      headers["HTTP-Referer"] = "https://vexlore.xyz";
+      headers["X-Title"] = "Vexlore agent";
+    }
+    const res = await fetch(endpoint, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: "Bearer " + key,
-        "User-Agent": "VEXLORE-Bot",
-      },
+      headers,
       body: JSON.stringify({
-        model: aiModelName(),
+        model,
         temperature: 0.85,
         max_tokens: 700,
         messages,
@@ -10672,8 +10684,20 @@ async function callAiChat(messages) {
     if (!res.ok) {
       const msg =
         (data && (data.error && (data.error.message || data.error))) ||
+        (typeof data === "string" ? data : null) ||
         "HTTP " + res.status;
-      return { ok: false, error: String(msg) };
+      return {
+        ok: false,
+        error:
+          String(msg) +
+          "\n\nAPI: <code>" +
+          host +
+          "</code>\nModel: <code>" +
+          model +
+          "</code>\nKey: <code>" +
+          (String(key).slice(0, 6) + "…") +
+          "</code>",
+      };
     }
     const text =
       data &&
@@ -10681,10 +10705,10 @@ async function callAiChat(messages) {
       data.choices[0] &&
       data.choices[0].message &&
       data.choices[0].message.content;
-    if (!text) return { ok: false, error: "Empty model response" };
+    if (!text) return { ok: false, error: "Empty model response from " + host };
     return { ok: true, text: String(text).trim() };
   } catch (e) {
-    return { ok: false, error: e.message || "AI request failed" };
+    return { ok: false, error: (e.message || "AI request failed") + " (" + host + ")" };
   }
 }
 
@@ -10772,10 +10796,13 @@ async function runAsk(ctx, question) {
     ];
     const out = await callAiChat(messages);
     if (!out.ok) {
+      const errHtml = String(out.error || "").includes("<code>")
+        ? String(out.error)
+        : esc(out.error);
       await ctx.api.editMessageText(
         ctx.chat.id,
         msg.message_id,
-        "🧠 <b>Vexlore agent</b>\n\n❌ " + esc(out.error) + FOOTER,
+        "🧠 <b>Vexlore agent</b>\n\n❌ " + errHtml + FOOTER,
         { parse_mode: "HTML", link_preview_options: { is_disabled: true } }
       );
       return;
