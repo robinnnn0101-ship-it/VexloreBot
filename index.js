@@ -9671,12 +9671,19 @@ async function registerSuperCommands() {
 }
 
 function argText(ctx) {
-  const t = String((ctx.match && String(ctx.match).trim()) || "");
-  if (t) return t;
+  // grammY: ctx.match is payload string; sometimes RegExpMatchArray
+  let payload = "";
+  if (ctx.match != null) {
+    if (typeof ctx.match === "string") payload = ctx.match;
+    else if (Array.isArray(ctx.match)) payload = ctx.match[1] || ctx.match[0] || "";
+    else if (typeof ctx.match === "object" && ctx.match.input == null) payload = String(ctx.match);
+  }
+  payload = String(payload || "").trim();
+  if (payload && !payload.startsWith("/")) return payload;
   const full = String((ctx.message && ctx.message.text) || "");
-  const parts = full.split(/\s+/);
-  parts.shift();
-  return parts.join(" ").trim();
+  // strip /cmd@bot
+  const stripped = full.replace(/^\/\S+@?\S*\s*/, "");
+  return stripped.trim();
 }
 
 function needCa(ctx) {
@@ -9687,15 +9694,51 @@ function needCa(ctx) {
 /* ── helpers for new cmds ── */
 
 async function dexPairForCa(ca) {
+  ca = String(ca || "").trim();
+  if (!ca) return null;
+  const urls = [];
   if (isEvmCa(ca)) {
-    const r = await jget("https://api.dexscreener.com/latest/dex/tokens/" + ca);
-    const pairs = (r.data && r.data.pairs) || [];
-    return pairs[0] || null;
+    urls.push("https://api.dexscreener.com/latest/dex/tokens/" + ca);
+    urls.push("https://api.dexscreener.com/token-pairs/v1/ethereum/" + ca);
+    urls.push("https://api.dexscreener.com/token-pairs/v1/base/" + ca);
+    urls.push("https://api.dexscreener.com/token-pairs/v1/bsc/" + ca);
+    urls.push("https://api.dexscreener.com/token-pairs/v1/arbitrum/" + ca);
+    urls.push("https://api.dexscreener.com/latest/dex/search?q=" + encodeURIComponent(ca));
+  } else {
+    urls.push("https://api.dexscreener.com/latest/dex/tokens/" + ca);
+    urls.push("https://api.dexscreener.com/tokens/v1/solana/" + ca);
+    urls.push("https://api.dexscreener.com/token-pairs/v1/solana/" + ca);
+    urls.push("https://api.dexscreener.com/latest/dex/search?q=" + encodeURIComponent(ca));
   }
-  const r = await jget("https://api.dexscreener.com/latest/dex/tokens/" + ca);
-  const pairs = (r.data && r.data.pairs) || [];
-  const sol = pairs.find((p) => p.chainId === "solana") || pairs[0];
-  return sol || null;
+  let best = null;
+  let bestLiq = -1;
+  for (const url of urls) {
+    const r = await soft(jget(url));
+    if (!r || !r.data) continue;
+    let pairs = [];
+    if (Array.isArray(r.data)) pairs = r.data;
+    else if (Array.isArray(r.data.pairs)) pairs = r.data.pairs;
+    for (const pair of pairs) {
+      if (!pair || typeof pair !== "object") continue;
+      const liq = Number(pair.liquidity && pair.liquidity.usd) || 0;
+      const addr = String(
+        (pair.baseToken && pair.baseToken.address) ||
+          pair.tokenAddress ||
+          ""
+      );
+      const match =
+        !ca ||
+        addr.toLowerCase() === ca.toLowerCase() ||
+        String(pair.pairAddress || "").toLowerCase() === ca.toLowerCase();
+      if (!match && pairs.length > 3) continue;
+      if (liq >= bestLiq) {
+        bestLiq = liq;
+        best = pair;
+      }
+    }
+    if (best && bestLiq > 0) break;
+  }
+  return best;
 }
 
 async function buildSocialsText(ca) {
@@ -9816,24 +9859,46 @@ async function buildPriceText(caOrQ) {
 }
 
 async function buildChartText(caOrQ) {
-  const hit = extractAnyCa(caOrQ);
+  const raw = String(caOrQ || "").trim();
+  const hit = extractAnyCa(raw);
   let pair = null;
   if (hit.ca) pair = await dexPairForCa(hit.ca);
-  else {
-    const r = await jget("https://api.dexscreener.com/latest/dex/search?q=" + encodeURIComponent(caOrQ));
-    pair = ((r.data && r.data.pairs) || [])[0] || null;
+  if (!pair) {
+    const r = await jget("https://api.dexscreener.com/latest/dex/search?q=" + encodeURIComponent(raw));
+    const pairs = (r.data && r.data.pairs) || [];
+    pair = pairs[0] || null;
   }
-  if (!pair) return "❌ Chart not found.\n" + esc(caOrQ) + FOOTER;
+  if (!pair) {
+    return "❌ Chart not found.\n<code>" + esc(raw) + "</code>" + FOOTER;
+  }
   const bt = pair.baseToken || {};
-  const url = pair.url || ("https://dexscreener.com/" + (pair.chainId || "solana") + "/" + (pair.pairAddress || bt.address));
+  const qt = pair.quoteToken || {};
+  const ch = pair.priceChange || {};
+  const txns = pair.txns || {};
+  const h24 = txns.h24 || {};
+  const h1 = txns.h1 || {};
+  const buys = (h24.buys || 0) + (h1.buys || 0);
+  const sells = (h24.sells || 0) + (h1.sells || 0);
+  const url =
+    pair.url ||
+    "https://dexscreener.com/" +
+      (pair.chainId || "solana") +
+      "/" +
+      (pair.pairAddress || bt.address || "");
   return (
-    "📈 <b>Chart</b>\n" +
+    "📈 <b>Chart</b> · " + esc(pair.dexId || pair.chainId || "") + "\n" +
     "<b>" + esc(bt.name || "") + " (" + esc(bt.symbol || "") + ")</b>\n" +
-    "<code>" + esc(bt.address || "") + "</code>\n\n" +
-    "Price: $" + esc(String(pair.priceUsd ?? "n/a")) + "\n" +
-    "MC: " + money(pair.marketCap || pair.fdv) + "\n" +
-    "Liq: " + money(pair.liquidity && pair.liquidity.usd) + "\n\n" +
-    "🔗 <a href=\"" + esc(url) + "\">Open DexScreener Chart</a>" +
+    "<code>" + esc(bt.address || hit.ca || raw) + "</code>\n\n" +
+    "💵 Price: <b>$" + esc(String(pair.priceUsd ?? "n/a")) + "</b>\n" +
+    "MC: " + money(pair.marketCap || pair.fdv) + " · FDV: " + money(pair.fdv) + "\n" +
+    "Liq: " + money(pair.liquidity && pair.liquidity.usd) + "\n" +
+    "Vol 24h: " + money(pair.volume && pair.volume.h24) + " · 1h: " + money(pair.volume && pair.volume.h1) + "\n" +
+    "Δ 5m " + pct(ch.m5) + " · 1h " + pct(ch.h1) + " · 6h " + pct(ch.h6) + " · 24h " + pct(ch.h24) + "\n" +
+    "Tx 24h: " + String((h24.buys || 0) + (h24.sells || 0)) +
+    " (🟢" + String(h24.buys || 0) + " / 🔴" + String(h24.sells || 0) + ")\n" +
+    "Pair: " + esc(bt.symbol || "?") + "/" + esc(qt.symbol || "?") + " · " + esc(pair.pairAddress ? short(pair.pairAddress) : "n/a") + "\n" +
+    (pair.pairCreatedAt ? "Created: " + utc(toDate(pair.pairCreatedAt)) + "\n" : "") +
+    "\n📊 " + url +
     FOOTER
   );
 }
@@ -9918,27 +9983,50 @@ async function buildConvertText(raw) {
 }
 
 async function buildPolyText(q) {
-  if (!q) return "Usage: /poly SEARCH_TERM\nExample: /poly trump" + FOOTER;
-  const r = await jget("https://gamma-api.polymarket.com/public-search?q=" + encodeURIComponent(q));
-  const events = (r.data && (r.data.events || r.data)) || [];
-  const list = Array.isArray(events) ? events.slice(0, 8) : [];
-  if (!list.length) {
-    // alternate endpoint
-    const r2 = await jget("https://gamma-api.polymarket.com/events?closed=false&limit=10&title=" + encodeURIComponent(q));
-    const list2 = Array.isArray(r2.data) ? r2.data.slice(0, 8) : [];
-    if (!list2.length) return "❌ No Polymarket results for <b>" + esc(q) + "</b>" + FOOTER;
-    const lines = list2.map((e, i) => {
+  q = String(q || "").trim();
+  if (!q) {
+    const r = await soft(
+      jget("https://gamma-api.polymarket.com/events?closed=false&limit=10&order=volume24hr&ascending=false")
+    );
+    const list = (r && Array.isArray(r.data) ? r.data : []).slice(0, 10);
+    if (!list.length) return "Usage: /poly SEARCH_TERM\nExample: /poly trump" + FOOTER;
+    const lines = list.map((e, i) => {
+      const vol = e.volume24hr ?? e.volume;
       return (
         i + 1 + ". <b>" + esc(e.title || e.question || "market") + "</b>\n" +
+        (vol != null ? "Vol24 " + money(vol) + " · " : "") +
         (e.slug ? "https://polymarket.com/event/" + e.slug : "")
       );
     });
-    return "🎲 <b>Polymarket</b> · " + esc(q) + "\n\n" + lines.join("\n\n") + FOOTER;
+    return "🎲 <b>Polymarket top (24h vol)</b>\n\n" + lines.join("\n\n") + "\n\nTip: /poly trump" + FOOTER;
   }
+  const r = await soft(jget("https://gamma-api.polymarket.com/public-search?q=" + encodeURIComponent(q)));
+  let list = [];
+  if (r && r.data) {
+    list = r.data.events || r.data.markets || (Array.isArray(r.data) ? r.data : []);
+  }
+  if (!list.length) {
+    const r2 = await soft(
+      jget("https://gamma-api.polymarket.com/events?closed=false&limit=15&title_contains=" + encodeURIComponent(q))
+    );
+    list = r2 && Array.isArray(r2.data) ? r2.data : [];
+  }
+  // client-side filter if API ignored query
+  if (list.length && q) {
+    const nq = q.toLowerCase();
+    const filtered = list.filter((e) =>
+      String(e.title || e.question || e.slug || "").toLowerCase().includes(nq)
+    );
+    if (filtered.length) list = filtered;
+  }
+  list = list.slice(0, 10);
+  if (!list.length) return "❌ No Polymarket results for <b>" + esc(q) + "</b>" + FOOTER;
   const lines = list.map((e, i) => {
+    const vol = e.volume24hr ?? e.volume;
     return (
       i + 1 + ". <b>" + esc(e.title || e.question || "market") + "</b>\n" +
-      (e.slug ? "https://polymarket.com/event/" + e.slug : (e.id ? "id " + e.id : ""))
+      (vol != null ? "Vol " + money(vol) + " · " : "") +
+      (e.slug ? "https://polymarket.com/event/" + e.slug : e.id ? "id " + e.id : "")
     );
   });
   return "🎲 <b>Polymarket</b> · " + esc(q) + "\n\n" + lines.join("\n\n") + FOOTER;
@@ -10083,40 +10171,99 @@ async function buildGroupPnlText(chat) {
 }
 
 async function buildCtosText() {
-  // Community takeovers from recent dexscreener is limited; use pump search + message
-  return (
-    "🏴 <b>CTOs (Community Takeovers)</b> · last 24h\n\n" +
-    "Live CTO feed depends on DexScreener order stream.\n" +
-    "Tip: paste a CA and open <b>DEX Paid</b> (/dp) — type <code>communityTakeover</code> shows there.\n\n" +
-    "Also check /tren for trenches activity." +
-    FOOTER
-  );
+  const lines = [];
+  // Latest token profiles often include CTO / paid profiles
+  const pr = await soft(jget("https://api.dexscreener.com/token-profiles/latest/v1"));
+  const profiles = (pr && Array.isArray(pr.data) ? pr.data : []).filter((x) => x && x.chainId === "solana").slice(0, 12);
+  if (profiles.length) {
+    lines.push("<b>🆕 Latest paid profiles</b>");
+    for (let i = 0; i < profiles.length; i++) {
+      const p = profiles[i];
+      lines.push(
+        i + 1 + ". <code>" + esc(p.tokenAddress || "") + "</code>\n" +
+        esc(String(p.description || p.url || "").slice(0, 100)) +
+        (p.url ? "\n" + p.url : "")
+      );
+    }
+  }
+  const br = await soft(jget("https://api.dexscreener.com/token-boosts/top/v1"));
+  const boosts = (br && Array.isArray(br.data) ? br.data : []).filter((x) => x && x.chainId === "solana").slice(0, 10);
+  if (boosts.length) {
+    lines.push("");
+    lines.push("<b>🚀 Top boosts (often CTO'd)</b>");
+    for (let i = 0; i < boosts.length; i++) {
+      const b = boosts[i];
+      lines.push(
+        i + 1 + ". <code>" + esc(b.tokenAddress || "") + "</code>\n" +
+        esc(String(b.description || "").slice(0, 90))
+      );
+    }
+  }
+  if (!lines.length) {
+    return (
+      "🏴 <b>CTOs (Community Takeovers)</b>\n\n" +
+      "No live CTO feed right now.\n" +
+      "Paste a CA then use /dp to see communityTakeover orders." +
+      FOOTER
+    );
+  }
+  return "🏴 <b>CTOs / Paid profiles</b> · live\n\n" + lines.join("\n\n") + FOOTER;
 }
 
 async function buildTrenchesText() {
-  // pump.fun advanced search for recent
-  try {
-    const list = await pumpSearch({ limit: 12, sort: "last_trade_timestamp", order: "DESC" });
-    const rows = (list || []).slice(0, 12);
-    if (!rows.length) {
-      return (
-        "🪖 <b>Trenches</b>\n\n" +
-        "No live trench feed right now.\nPaste a CA for full scan." +
-        FOOTER
-      );
+  // Live Pump.fun feed (working endpoint)
+  let rows = [];
+  const tries = [
+    "https://frontend-api-v3.pump.fun/coins?offset=0&limit=15&sort=last_trade_timestamp&order=DESC&includeNsfw=false",
+    "https://frontend-api-v3.pump.fun/coins?offset=0&limit=15&sort=created_timestamp&order=DESC&includeNsfw=false",
+    "https://frontend-api-v3.pump.fun/coins?offset=0&limit=15&sort=market_cap&order=DESC&includeNsfw=false",
+  ];
+  for (const url of tries) {
+    const r = await soft(jget(url));
+    if (r && Array.isArray(r.data) && r.data.length) {
+      rows = r.data;
+      break;
     }
-    const lines = rows.map((c, i) => {
+  }
+  // DexScreener boosts as secondary trench signal
+  let boosts = [];
+  const br = await soft(jget("https://api.dexscreener.com/token-boosts/top/v1"));
+  if (br && Array.isArray(br.data)) boosts = br.data.filter((x) => x && x.chainId === "solana").slice(0, 8);
+
+  if (!rows.length && !boosts.length) {
+    return "🪖 <b>Trenches</b>\n\nFeed temporarily empty. Paste a CA for full scan." + FOOTER;
+  }
+
+  const lines = [];
+  if (rows.length) {
+    lines.push("<b>🔥 Live Pump.fun</b>");
+    for (let i = 0; i < Math.min(12, rows.length); i++) {
+      const c = rows[i];
       const mc = c.usd_market_cap || c.market_cap;
-      return (
+      const vol = c.volume_24h || c.volume;
+      lines.push(
         i + 1 + ". <b>" + esc(c.name || "") + " (" + esc(c.symbol || "") + ")</b>\n" +
         "<code>" + esc(c.mint || "") + "</code>\n" +
-        "MC " + money(mc) + (c.complete ? " · bonded" : " · bonding")
+        "MC " + money(mc) +
+        (vol != null ? " · Vol " + money(vol) : "") +
+        (c.complete ? " · bonded" : " · bonding") +
+        (c.king_of_the_hill_timestamp ? " · 👑 KOTH" : "")
       );
-    });
-    return "🪖 <b>Trenches</b> · recent Pump.fun\n\n" + lines.join("\n\n") + FOOTER;
-  } catch (_) {
-    return "🪖 <b>Trenches</b>\n\nFeed unavailable. Paste a CA for full scan." + FOOTER;
+    }
   }
+  if (boosts.length) {
+    lines.push("");
+    lines.push("<b>🚀 Dex boosted</b>");
+    for (let i = 0; i < boosts.length; i++) {
+      const b = boosts[i];
+      lines.push(
+        i + 1 + ". <code>" + esc(b.tokenAddress || "") + "</code>\n" +
+        esc(String(b.description || "").slice(0, 80)) +
+        (b.url ? "\n" + b.url : "")
+      );
+    }
+  }
+  return "🪖 <b>Trenches</b>\n\n" + lines.join("\n\n") + FOOTER;
 }
 
 async function buildXtText() {
@@ -10188,6 +10335,109 @@ async function buildNarrativeText(ca) {
 
 /* ── command registrations ── */
 
+
+async function buildCryptoHeatText() {
+  const [markets, trending] = await Promise.all([
+    soft(jget("https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=25&page=1&sparkline=false&price_change_percentage=1h%2C24h")),
+    soft(jget("https://api.coingecko.com/api/v3/search/trending")),
+  ]);
+  const list = (markets && Array.isArray(markets.data) ? markets.data : []).slice(0, 20);
+  if (!list.length) return "🔥 <b>Crypto heatmap</b>\n\nCould not load market data." + FOOTER;
+  const sorted = list.slice().sort(
+    (a, b) => (b.price_change_percentage_24h || 0) - (a.price_change_percentage_24h || 0)
+  );
+  const gainers = sorted.filter((c) => (c.price_change_percentage_24h || 0) > 0).slice(0, 8);
+  const losers = sorted.filter((c) => (c.price_change_percentage_24h || 0) < 0).slice(-8).reverse();
+  const fmt = (c, i) => {
+    const ch = c.price_change_percentage_24h;
+    const icon = ch >= 0 ? "🟢" : "🔴";
+    return (
+      icon + " <b>" + esc((c.symbol || "").toUpperCase()) + "</b> " +
+      esc(c.name) + " · $" + Number(c.current_price).toLocaleString("en-US", { maximumFractionDigits: 6 }) +
+      " · " + (ch >= 0 ? "+" : "") + (ch != null ? ch.toFixed(2) : "n/a") + "%"
+    );
+  };
+  const trendCoins = (((trending && trending.data && trending.data.coins) || []).map((x) => x.item).filter(Boolean)).slice(0, 8);
+  const tLines = trendCoins.map((c, i) =>
+    i + 1 + ". <b>" + esc((c.symbol || "").toUpperCase()) + "</b> " + esc(c.name) +
+    (c.market_cap_rank ? " · rank #" + c.market_cap_rank : "")
+  );
+  return (
+    "🔥 <b>Crypto Market Heat</b>\n\n" +
+    "<b>📈 Top gainers (top MC set)</b>\n" + gainers.map(fmt).join("\n") + "\n\n" +
+    "<b>📉 Top losers</b>\n" + losers.map(fmt).join("\n") + "\n\n" +
+    (tLines.length ? "<b>🔥 Trending</b>\n" + tLines.join("\n") : "") +
+    FOOTER
+  );
+}
+
+async function buildStockHeatText() {
+  // Public Yahoo-style via CoinGecko doesn't cover stocks; use free stooq-like batch via financialmodelingprep free is key-gated.
+  // Use a compact in-bot snapshot from Yahoo chart APIs (no key).
+  const symbols = ["AAPL", "MSFT", "NVDA", "TSLA", "AMZN", "META", "GOOGL", "AMD", "SPY", "QQQ"];
+  const lines = [];
+  for (const sym of symbols) {
+    try {
+      const r = await soft(
+        jget("https://query1.finance.yahoo.com/v8/finance/chart/" + sym + "?interval=1d&range=5d")
+      );
+      const res = r && r.data && r.data.chart && r.data.chart.result && r.data.chart.result[0];
+      if (!res) continue;
+      const meta = res.meta || {};
+      const price = meta.regularMarketPrice;
+      const prev = meta.chartPreviousClose || meta.previousClose;
+      const ch = price != null && prev ? ((price - prev) / prev) * 100 : null;
+      const icon = ch == null ? "⚪" : ch >= 0 ? "🟢" : "🔴";
+      lines.push(
+        icon + " <b>" + sym + "</b> · $" +
+        (price != null ? Number(price).toFixed(2) : "n/a") +
+        (ch != null ? " · " + (ch >= 0 ? "+" : "") + ch.toFixed(2) + "%" : "")
+      );
+    } catch (_) {}
+  }
+  if (!lines.length) {
+    return "🇺🇸 <b>US Stock Heat</b>\n\nCould not load quotes right now. Try again shortly." + FOOTER;
+  }
+  return "🇺🇸 <b>US Stock Heat</b>\n\n" + lines.join("\n") + FOOTER;
+}
+
+async function buildRektText() {
+  // Market stress board from CoinGecko (largest moves + high volume) — stays inside the bot
+  const r = await soft(
+    jget(
+      "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=volume_desc&per_page=40&page=1&sparkline=false&price_change_percentage=1h%2C24h"
+    )
+  );
+  const list = r && Array.isArray(r.data) ? r.data : [];
+  if (!list.length) return "💥 <b>Rekt board</b>\n\nCould not load market data." + FOOTER;
+  const hard = list
+    .filter((c) => (c.price_change_percentage_24h || 0) <= -8)
+    .sort((a, b) => (a.price_change_percentage_24h || 0) - (b.price_change_percentage_24h || 0))
+    .slice(0, 12);
+  const pump = list
+    .filter((c) => (c.price_change_percentage_24h || 0) >= 12)
+    .sort((a, b) => (b.price_change_percentage_24h || 0) - (a.price_change_percentage_24h || 0))
+    .slice(0, 8);
+  const fmt = (c) => {
+    const ch = c.price_change_percentage_24h;
+    return (
+      "• <b>" + esc((c.symbol || "").toUpperCase()) + "</b> " + esc(c.name) +
+      " · " + (ch >= 0 ? "+" : "") + ch.toFixed(1) + "%" +
+      " · Vol " + money(c.total_volume)
+    );
+  };
+  return (
+    "💥 <b>Rekt / Liquidation-style board</b>\n" +
+    "<i>Biggest 24h dumps & pumps by volume set</i>\n\n" +
+    "<b>🩸 Bleeding (≥ -8%)</b>\n" +
+    (hard.length ? hard.map(fmt).join("\n") : "None in this set") +
+    "\n\n<b>🚀 Vertical (≥ +12%)</b>\n" +
+    (pump.length ? pump.map(fmt).join("\n") : "None in this set") +
+    FOOTER
+  );
+}
+
+
 bot.command("help", (ctx) =>
   ctx.reply(WELCOME + "\n\n📋 <b>Full menu</b>\nType / to open the command list.", {
     parse_mode: "HTML",
@@ -10200,6 +10450,7 @@ bot.command("c", async (ctx) => {
   if (!q) return ctx.reply("Usage: /c CA or TOKEN");
   touchGroup(ctx.chat);
   const msg = await ctx.reply("📈 Building chart...");
+  rememberOwner(ctx.chat.id, msg.message_id, ctx.from && ctx.from.id);
   try {
     const text = await buildChartText(q);
     await ctx.api.editMessageText(ctx.chat.id, msg.message_id, text, {
@@ -10207,7 +10458,7 @@ bot.command("c", async (ctx) => {
       link_preview_options: { is_disabled: true },
     });
   } catch (e) {
-    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, "Error: " + (e.message || "fail"));
+    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, "Error: " + (e.message || "fail") + FOOTER);
   }
 });
 
@@ -10363,34 +10614,42 @@ bot.command("p", async (ctx) => {
 });
 
 bot.command("hm", async (ctx) => {
-  await ctx.reply(
-    "🔥 <b>Crypto Market Heatmap</b>\n\n" +
-      "🔗 <a href=\"https://coinbubble.live/\">CoinBubble</a>\n" +
-      "🔗 <a href=\"https://abs.xyz/heatmap\">abs.xyz heatmap</a>\n" +
-      "🔗 <a href=\"https://coingecko.com/en/charts\">CoinGecko Charts</a>" +
-      FOOTER,
-    { parse_mode: "HTML", link_preview_options: { is_disabled: true } }
-  );
+  const msg = await ctx.reply("🔥 Loading crypto heat...");
+  try {
+    const text = await buildCryptoHeatText();
+    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, text, {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+    });
+  } catch (e) {
+    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, "Error: " + (e.message || "fail"));
+  }
 });
 
 bot.command("hms", async (ctx) => {
-  await ctx.reply(
-    "🇺🇸 <b>US Stock Heatmap</b>\n\n" +
-      "🔗 <a href=\"https://finviz.com/map.ashx\">Finviz Map</a>\n" +
-      "🔗 <a href=\"https://www.tradingview.com/heatmap/stock/\">TradingView Stock Heatmap</a>" +
-      FOOTER,
-    { parse_mode: "HTML", link_preview_options: { is_disabled: true } }
-  );
+  const msg = await ctx.reply("🇺🇸 Loading stock heat...");
+  try {
+    const text = await buildStockHeatText();
+    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, text, {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+    });
+  } catch (e) {
+    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, "Error: " + (e.message || "fail"));
+  }
 });
 
 bot.command("rekt", async (ctx) => {
-  await ctx.reply(
-    "💥 <b>Liquidation Heatmap</b>\n\n" +
-      "🔗 <a href=\"https://www.coinglass.com/LiquidationData\">CoinGlass Liquidations</a>\n" +
-      "🔗 <a href=\"https://www.coinglass.com/pro/futures/LiquidationHeatMap\">Liquidation Heatmap</a>" +
-      FOOTER,
-    { parse_mode: "HTML", link_preview_options: { is_disabled: true } }
-  );
+  const msg = await ctx.reply("💥 Loading rekt board...");
+  try {
+    const text = await buildRektText();
+    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, text, {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+    });
+  } catch (e) {
+    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, "Error: " + (e.message || "fail"));
+  }
 });
 
 bot.command("i", async (ctx) => {
