@@ -9,6 +9,10 @@ const X_BEARER = String(process.env.X_BEARER || "")
   .replace(/^Bearer\s+/i, "")
   .replace(/^["']+|["']+$/g, "");
 const GH_TOKEN = process.env.GITHUB_TOKEN || "";
+const XAI_API_KEY = String(process.env.XAI_API_KEY || process.env.GROK_API_KEY || "").trim();
+const OPENAI_API_KEY = String(process.env.OPENAI_API_KEY || "").trim();
+const AI_BASE_URL = String(process.env.AI_BASE_URL || "").trim().replace(/\/$/, "");
+const AI_MODEL = String(process.env.AI_MODEL || "").trim();
 const FOOTER = "\n\n❤️ Made by Robin with Love";
 // Prefer Railway volume (or DATA_DIR) so calls survive redeploys.
 const DATA_DIR = process.env.RAILWAY_VOLUME_MOUNT_PATH || process.env.DATA_DIR || __dirname;
@@ -423,6 +427,11 @@ const store = {
   groups: {},
   calls: [],
   lastGmDay: "",
+  // AI agent memory — "trained" by users (tips + rated Q&A)
+  agent: {
+    tips: [], // { text, by, at }
+    qa: [], // { q, a, up, down, by, at }
+  },
 };
 
 function loadStore() {
@@ -432,6 +441,11 @@ function loadStore() {
     store.groups = raw.groups && typeof raw.groups === "object" ? raw.groups : {};
     store.calls = Array.isArray(raw.calls) ? raw.calls : [];
     store.lastGmDay = raw.lastGmDay || "";
+    const ag = raw.agent && typeof raw.agent === "object" ? raw.agent : {};
+    store.agent = {
+      tips: Array.isArray(ag.tips) ? ag.tips : [],
+      qa: Array.isArray(ag.qa) ? ag.qa : [],
+    };
   } catch (e) {
     console.error("load store fail", e.message || e);
   }
@@ -451,6 +465,7 @@ function saveStore(now = false) {
             groups: store.groups,
             calls: store.calls,
             lastGmDay: store.lastGmDay,
+            agent: store.agent,
           },
           null,
           2
@@ -9067,7 +9082,9 @@ const WELCOME =
   "/xt — trending tweets\n" +
   "/x link — X post scan\n" +
   "/gh repo — GitHub analysis\n" +
-  "/dapp — open DApp\n\n" +
+  "/dapp — open DApp\n" +
+  "/ask — AI agent (uses live data)\n" +
+  "/teach — train the agent\n\n" +
   "🟠 <b>Other chains</b>\n" +
   "Paste a 0x — auto detect\n" +
   "/rh  ·  /arc  ·  /holders  ·  /lore\n\n" +
@@ -9659,6 +9676,8 @@ const SUPER_COMMANDS = [
   { command: "rh", description: "Robinhood Chain scan" },
   { command: "arc", description: "Arc chain scan" },
   { command: "help", description: "Full command list" },
+  { command: "ask", description: "Ask the VEXLORE AI agent" },
+  { command: "teach", description: "Train the AI agent with a tip" },
 ];
 
 async function registerSuperCommands() {
@@ -10436,6 +10455,400 @@ async function buildRektText() {
     FOOTER
   );
 }
+
+
+
+/* ───────── AI AGENT (/ask · /teach) ───────── */
+
+function aiConfigured() {
+  return !!(XAI_API_KEY || OPENAI_API_KEY || AI_BASE_URL);
+}
+
+function aiEndpoint() {
+  if (AI_BASE_URL) return AI_BASE_URL + "/chat/completions";
+  if (XAI_API_KEY) return "https://api.x.ai/v1/chat/completions";
+  return "https://api.openai.com/v1/chat/completions";
+}
+
+function aiKey() {
+  if (AI_BASE_URL) return OPENAI_API_KEY || XAI_API_KEY;
+  if (XAI_API_KEY) return XAI_API_KEY;
+  return OPENAI_API_KEY;
+}
+
+function aiModelName() {
+  if (AI_MODEL) return AI_MODEL;
+  if (XAI_API_KEY && !AI_BASE_URL) return "grok-3-mini";
+  return "gpt-4o-mini";
+}
+
+function agentSystemPrompt() {
+  const tips = (store.agent.tips || [])
+    .slice(-40)
+    .map((t) => "- " + String(t.text || "").slice(0, 240))
+    .join("\n");
+  const goodQa = (store.agent.qa || [])
+    .filter((x) => (x.up || 0) > (x.down || 0))
+    .slice(-15)
+    .map(
+      (x) =>
+        "Q: " +
+        String(x.q || "").slice(0, 160) +
+        "\nA: " +
+        String(x.a || "").slice(0, 320)
+    )
+    .join("\n\n");
+
+  return (
+    "You are **Vexlore agent**, the chaotic-good AI inside the VEXLORE Telegram crypto bot.\n" +
+    "Name: always introduce yourself as Vexlore agent when relevant.\n" +
+    "Personality: sharp degen humour, roast bad charts lovingly, never cruel to humans, always useful.\n" +
+    "Style: short paragraphs, Telegram-friendly, light emoji, no corporate tone, no fake certainty.\n" +
+    "Rules:\n" +
+    "1) Use the LIVE DATA block as ground truth when present. Prefer numbers from it over vibes.\n" +
+    "2) If data is missing, say so — do not invent prices, holders, or liquidity.\n" +
+    "3) Not financial advice. Treat calls as entertainment + research aids.\n" +
+    "4) When a CA is involved, mention key risks (bundle, paid profile, age, liq) if data shows them.\n" +
+    "5) Keep answers under ~350 words unless the user asks for depth.\n" +
+    "6) Humour is mandatory, accuracy is non-negotiable.\n" +
+    "7) Obey community tips below when they do not conflict with live data.\n\n" +
+    (tips
+      ? "Community tips (user-trained):\n" + tips + "\n\n"
+      : "Community tips: none yet — users can /teach a tip.\n\n") +
+    (goodQa ? "High-rated past answers:\n" + goodQa + "\n" : "")
+  );
+}
+
+async function gatherAskContext(question, chat) {
+  const parts = [];
+  const hit = extractAnyCa(question);
+  const evm = extractEvmCa(question);
+  const ca = (hit && hit.ca) || evm || "";
+
+  if (ca && isEvmCa(ca)) {
+    try {
+      const chain = await detectEvmChain(ca);
+      if (chain === "arc") {
+        const rep = await buildArcReport(ca);
+        parts.push("LIVE ARC REPORT:\n" + String(rep).replace(/<[^>]+>/g, "").slice(0, 3500));
+      } else {
+        const rep = await buildRhReport(ca);
+        parts.push("LIVE ROBINHOOD REPORT:\n" + String(rep).replace(/<[^>]+>/g, "").slice(0, 3500));
+      }
+    } catch (e) {
+      parts.push("EVM lookup failed: " + (e.message || "fail"));
+    }
+  } else if (ca && isCa(ca)) {
+    try {
+      const [report, pair, paid] = await Promise.all([
+        soft(buildReport(ca)),
+        soft(dexPairForCa(ca)),
+        soft(dexPaid(ca)),
+      ]);
+      if (report) {
+        parts.push(
+          "LIVE SOLANA REPORT:\n" + String(report).replace(/<[^>]+>/g, "").slice(0, 4000)
+        );
+      }
+      if (pair) {
+        const bt = pair.baseToken || {};
+        parts.push(
+          "DEX SNAPSHOT:\n" +
+            "name=" + (bt.name || "") +
+            " symbol=" + (bt.symbol || "") +
+            " priceUsd=" + (pair.priceUsd ?? "n/a") +
+            " mc=" + (pair.marketCap || pair.fdv || "n/a") +
+            " liq=" + ((pair.liquidity && pair.liquidity.usd) || "n/a") +
+            " vol24=" + ((pair.volume && pair.volume.h24) || "n/a") +
+            " ch24=" + ((pair.priceChange && pair.priceChange.h24) || "n/a") +
+            " dex=" + (pair.dexId || "") +
+            " pair=" + (pair.pairAddress || "")
+        );
+      }
+      if (paid && paid.ok) {
+        parts.push(
+          "DEX PAID: profile=" +
+            paid.profilePaid +
+            " ad=" +
+            paid.adPaid +
+            " orders=" +
+            ((paid.orders && paid.orders.length) || 0)
+        );
+      }
+    } catch (e) {
+      parts.push("Solana lookup failed: " + (e.message || "fail"));
+    }
+  }
+
+  // group call context
+  try {
+    const chatId = chat && chat.id;
+    const recent = (store.calls || [])
+      .filter((c) => !chatId || String(c.chatId) === String(chatId))
+      .slice()
+      .sort((a, b) => Number(b.calledAt) - Number(a.calledAt))
+      .slice(0, 8);
+    if (recent.length) {
+      parts.push(
+        "RECENT GROUP CALLS:\n" +
+          recent
+            .map(
+              (c) =>
+                short(c.ca) +
+                " by " +
+                (c.username ? "@" + c.username : c.name || c.userId) +
+                " @ " +
+                utc(toDate(c.calledAt))
+            )
+            .join("\n")
+      );
+    }
+  } catch (_) {}
+
+  // light market pulse for non-CA questions
+  if (!ca) {
+    try {
+      const r = await soft(
+        jget(
+          "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=5&page=1&sparkline=false&price_change_percentage=24h"
+        )
+      );
+      const list = r && Array.isArray(r.data) ? r.data : [];
+      if (list.length) {
+        parts.push(
+          "MARKET PULSE:\n" +
+            list
+              .map(
+                (c) =>
+                  (c.symbol || "").toUpperCase() +
+                  " $" +
+                  c.current_price +
+                  " 24h " +
+                  (c.price_change_percentage_24h != null
+                    ? c.price_change_percentage_24h.toFixed(2) + "%"
+                    : "n/a")
+              )
+              .join("\n")
+        );
+      }
+    } catch (_) {}
+  }
+
+  return parts.join("\n\n").slice(0, 9000);
+}
+
+async function callAiChat(messages) {
+  if (!aiConfigured()) {
+    return {
+      ok: false,
+      error:
+        "AI not configured. Set XAI_API_KEY (Grok) or OPENAI_API_KEY on the server, then restart.",
+    };
+  }
+  const key = aiKey();
+  if (!key && !AI_BASE_URL) {
+    return { ok: false, error: "Missing AI API key." };
+  }
+  try {
+    const res = await fetch(aiEndpoint(), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer " + key,
+        "User-Agent": "VEXLORE-Bot",
+      },
+      body: JSON.stringify({
+        model: aiModelName(),
+        temperature: 0.85,
+        max_tokens: 700,
+        messages,
+      }),
+      signal: AbortSignal.timeout(45000),
+    });
+    let data = null;
+    try {
+      data = await res.json();
+    } catch (_) {}
+    if (!res.ok) {
+      const msg =
+        (data && (data.error && (data.error.message || data.error))) ||
+        "HTTP " + res.status;
+      return { ok: false, error: String(msg) };
+    }
+    const text =
+      data &&
+      data.choices &&
+      data.choices[0] &&
+      data.choices[0].message &&
+      data.choices[0].message.content;
+    if (!text) return { ok: false, error: "Empty model response" };
+    return { ok: true, text: String(text).trim() };
+  } catch (e) {
+    return { ok: false, error: e.message || "AI request failed" };
+  }
+}
+
+function askKeyboard(qaId) {
+  return new InlineKeyboard()
+    .text("👍 Solid", "askfb:up:" + qaId)
+    .text("👎 Nah", "askfb:down:" + qaId)
+    .text("🗑 Delete", "del");
+}
+
+function rememberAgentQa(q, a, user) {
+  if (!store.agent) store.agent = { tips: [], qa: [] };
+  if (!Array.isArray(store.agent.qa)) store.agent.qa = [];
+  const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+  store.agent.qa.push({
+    id,
+    q: String(q || "").slice(0, 500),
+    a: String(a || "").slice(0, 2000),
+    up: 0,
+    down: 0,
+    by: user && (user.username || user.id) || "",
+    at: Date.now(),
+  });
+  if (store.agent.qa.length > 300) {
+    store.agent.qa = store.agent.qa.slice(-250);
+  }
+  saveStore();
+  return id;
+}
+
+function addAgentTip(text, user) {
+  if (!store.agent) store.agent = { tips: [], qa: [] };
+  if (!Array.isArray(store.agent.tips)) store.agent.tips = [];
+  const clean = String(text || "").trim().slice(0, 400);
+  if (!clean) return false;
+  // de-dupe similar
+  const normed = clean.toLowerCase();
+  if (store.agent.tips.some((t) => String(t.text || "").toLowerCase() === normed)) {
+    return "dup";
+  }
+  store.agent.tips.push({
+    text: clean,
+    by: user && (user.username || String(user.id)) || "",
+    at: Date.now(),
+  });
+  if (store.agent.tips.length > 120) {
+    store.agent.tips = store.agent.tips.slice(-100);
+  }
+  saveStore();
+  return true;
+}
+
+async function runAsk(ctx, question) {
+  const q = String(question || "").trim();
+  if (!q) {
+    return ctx.reply(
+      "🧠 <b>Vexlore agent</b>\n\n" +
+        "Usage:\n" +
+        "<code>/ask should I ape this CA …</code>\n" +
+        "<code>/ask what's hot in the trenches</code>\n\n" +
+        "Train me with <code>/teach always check liq before MC</code>\n" +
+        (aiConfigured()
+          ? "Model: <code>" + esc(aiModelName()) + "</code>"
+          : "⚠️ Set <code>XAI_API_KEY</code> or <code>OPENAI_API_KEY</code> to enable answers.") +
+        FOOTER,
+      { parse_mode: "HTML", link_preview_options: { is_disabled: true } }
+    );
+  }
+
+  touchGroup(ctx.chat);
+  const msg = await ctx.reply("🧠 Vexlore agent is reading the chain room...");
+  rememberOwner(ctx.chat.id, msg.message_id, ctx.from && ctx.from.id);
+
+  try {
+    const live = await gatherAskContext(q, ctx.chat);
+    const messages = [
+      { role: "system", content: agentSystemPrompt() },
+      {
+        role: "user",
+        content:
+          (live ? "LIVE DATA:\n" + live + "\n\n" : "") +
+          "USER QUESTION:\n" +
+          q,
+      },
+    ];
+    const out = await callAiChat(messages);
+    if (!out.ok) {
+      await ctx.api.editMessageText(
+        ctx.chat.id,
+        msg.message_id,
+        "🧠 <b>Vexlore agent</b>\n\n❌ " + esc(out.error) + FOOTER,
+        { parse_mode: "HTML", link_preview_options: { is_disabled: true } }
+      );
+      return;
+    }
+    const qaId = rememberAgentQa(q, out.text, ctx.from);
+    const body =
+      "🧠 <b>Vexlore agent</b>\n\n" +
+      esc(out.text).slice(0, 3500) +
+      FOOTER;
+    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, body, {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+      reply_markup: askKeyboard(qaId),
+    });
+  } catch (e) {
+    await ctx.api.editMessageText(
+      ctx.chat.id,
+      msg.message_id,
+      "🧠 Vexlore agent failed: " + esc(e.message || "fail") + FOOTER,
+      { parse_mode: "HTML" }
+    );
+  }
+}
+
+bot.command("ask", async (ctx) => {
+  await runAsk(ctx, argText(ctx));
+});
+
+bot.command("teach", async (ctx) => {
+  const tip = argText(ctx);
+  if (!tip) {
+    return ctx.reply(
+      "🎓 <b>Train Vexlore agent</b>\n\n" +
+        "Send a tip the agent should remember:\n" +
+        "<code>/teach fade low-liq paid profile rugs</code>\n" +
+        "<code>/teach in this group we call only after /vamp</code>\n\n" +
+        "Tips: " +
+        ((store.agent && store.agent.tips && store.agent.tips.length) || 0) +
+        " · Rated answers: " +
+        ((store.agent && store.agent.qa && store.agent.qa.length) || 0) +
+        FOOTER,
+      { parse_mode: "HTML", link_preview_options: { is_disabled: true } }
+    );
+  }
+  const res = addAgentTip(tip, ctx.from);
+  if (res === "dup") {
+    return ctx.reply("🤔 I already memorized something like that." + FOOTER, {
+      parse_mode: "HTML",
+    });
+  }
+  await ctx.reply(
+    "🎓 Learned.\n<i>" +
+      esc(tip).slice(0, 400) +
+      "</i>\n\nVexlore agent will use this tip on future /ask answers." +
+      FOOTER,
+    { parse_mode: "HTML", link_preview_options: { is_disabled: true } }
+  );
+});
+
+bot.callbackQuery(/^askfb:(up|down):(.+)$/, async (ctx) => {
+  const side = ctx.match[1];
+  const id = ctx.match[2];
+  const row = (store.agent && store.agent.qa || []).find((x) => x.id === id);
+  if (!row) {
+    return ctx.answerCallbackQuery({ text: "That lesson expired", show_alert: true });
+  }
+  if (side === "up") row.up = (row.up || 0) + 1;
+  else row.down = (row.down || 0) + 1;
+  saveStore();
+  await ctx.answerCallbackQuery({
+    text: side === "up" ? "Vexlore agent got a treat 👍" : "Vexlore agent will do better 👎",
+  });
+});
 
 
 bot.command("help", (ctx) =>
