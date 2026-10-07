@@ -9047,6 +9047,7 @@ const WELCOME =
   "🏠 Community: <a href=\"https://t.me/VEXLORECOMM\">t.me/VEXLORECOMM</a>\n" +
   "🐦 X: <a href=\"https://x.com/Vexlorebot\">@Vexlorebot</a>\n" +
   "🌐 Web: <a href=\"https://vexlore.xyz\">vexlore.xyz</a>\n\n" +
+  "📋 Type / to open the full super command menu\n" +
   "❤️ Made by Robin with Love";
 
 bot.command("start", (ctx) =>
@@ -10167,6 +10168,1002 @@ bot.callbackQuery(/^del$/, async (ctx) => {
   }
 });
 
+/* ───────── SUPER MENU + EXTRA COMMANDS (from VEXLORE menu screenshots) ───────── */
+/* These do NOT replace existing handlers. They add aliases + new working commands. */
+
+const SUPER_COMMANDS = [
+  { command: "start", description: "Welcome & help" },
+  { command: "lb", description: "View the Leaderboard" },
+  { command: "c", description: "Post a Chart" },
+  { command: "th", description: "View the Top Holders" },
+  { command: "pnl", description: "Generate a PNL Card" },
+  { command: "nar", description: "Get Narrative of a Token" },
+  { command: "dev", description: "View Deployer & Deployments" },
+  { command: "soc", description: "Get Social Media Links" },
+  { command: "dp", description: "Check DEX Paid Data" },
+  { command: "dapp", description: "Access our DApp" },
+  { command: "ta", description: "Technical Analysis Read" },
+  { command: "calls", description: "View the last 10 Calls" },
+  { command: "elb", description: "Export the Leaderboard" },
+  { command: "gpnl", description: "Generate a Group PnL" },
+  { command: "fc", description: "View the First Caller" },
+  { command: "p", description: "Simple Price Query" },
+  { command: "hm", description: "View Crypto Market Heatmap" },
+  { command: "hms", description: "View US Stock Heatmap" },
+  { command: "rekt", description: "View the Liquidation Heatmap" },
+  { command: "i", description: "Get Top Coins" },
+  { command: "v", description: "Convert a Token" },
+  { command: "tw", description: "View the Top Wallets" },
+  { command: "tt", description: "View Top Traders" },
+  { command: "ws", description: "View Wallet Stats" },
+  { command: "s", description: "Search for a Token" },
+  { command: "poly", description: "Search Polymarket" },
+  { command: "xt", description: "View Trending Tweets" },
+  { command: "ctos", description: "View CTOs (Last 24h)" },
+  { command: "thesis", description: "Read Fomo Holder Thesis" },
+  { command: "tren", description: "View Trenches Stats" },
+  { command: "x", description: "Check X post / recycled accounts" },
+  { command: "gh", description: "GitHub Repo Analysis" },
+  { command: "do", description: "Domain Lookup" },
+  { command: "vamp", description: "OG vs copy check" },
+  { command: "bundle", description: "Bundle / cluster check" },
+  { command: "wallet", description: "Wallet analyser" },
+  { command: "stonks", description: "StonkFun / stonks.fun pad" },
+  { command: "analysis", description: "Full score sheet" },
+  { command: "rh", description: "Robinhood Chain scan" },
+  { command: "arc", description: "Arc chain scan" },
+  { command: "help", description: "Full command list" },
+];
+
+async function registerSuperCommands() {
+  try {
+    await bot.api.setMyCommands(SUPER_COMMANDS);
+    console.log("Super command menu registered:", SUPER_COMMANDS.length);
+  } catch (e) {
+    console.error("setMyCommands fail", e.message || e);
+  }
+}
+
+function argText(ctx) {
+  const t = String((ctx.match && String(ctx.match).trim()) || "");
+  if (t) return t;
+  const full = String((ctx.message && ctx.message.text) || "");
+  const parts = full.split(/\s+/);
+  parts.shift();
+  return parts.join(" ").trim();
+}
+
+function needCa(ctx) {
+  const hit = extractAnyCa(argText(ctx) || (ctx.message && ctx.message.text) || "");
+  return hit;
+}
+
+/* ── helpers for new cmds ── */
+
+async function dexPairForCa(ca) {
+  if (isEvmCa(ca)) {
+    const r = await jget("https://api.dexscreener.com/latest/dex/tokens/" + ca);
+    const pairs = (r.data && r.data.pairs) || [];
+    return pairs[0] || null;
+  }
+  const r = await jget("https://api.dexscreener.com/latest/dex/tokens/" + ca);
+  const pairs = (r.data && r.data.pairs) || [];
+  const sol = pairs.find((p) => p.chainId === "solana") || pairs[0];
+  return sol || null;
+}
+
+async function buildSocialsText(ca) {
+  const pair = await dexPairForCa(ca);
+  if (!pair) return "❌ Token not found on DexScreener.\n<code>" + esc(ca) + "</code>" + FOOTER;
+  const info = pair.info || {};
+  const socials = Array.isArray(info.socials) ? info.socials : [];
+  const sites = Array.isArray(info.websites) ? info.websites : [];
+  let tw = "", tg = "", web = "", gh = "", disc = "";
+  for (const s of socials) {
+    const type = String((s && s.type) || "").toLowerCase();
+    const url = String((s && (s.url || s.handle)) || "");
+    if (type.includes("twitter") || type.includes("x")) tw = url;
+    if (type.includes("telegram")) tg = url;
+    if (type.includes("github")) gh = url;
+    if (type.includes("discord")) disc = url;
+  }
+  if (sites[0]) web = sites[0].url || sites[0];
+  const name = (pair.baseToken && pair.baseToken.name) || "";
+  const sym = (pair.baseToken && pair.baseToken.symbol) || "";
+  return (
+    "🔗 <b>Socials</b>\n" +
+    "<b>" + esc(name) + " (" + esc(sym) + ")</b>\n" +
+    "<code>" + esc(ca) + "</code>\n\n" +
+    (tw ? "🐦 X: " + esc(tw) + "\n" : "🐦 X: n/a\n") +
+    (tg ? "✈️ TG: " + esc(tg) + "\n" : "✈️ TG: n/a\n") +
+    (web ? "🌐 Web: " + esc(web) + "\n" : "🌐 Web: n/a\n") +
+    (gh ? "👾 GH: " + esc(gh) + "\n" : "") +
+    (disc ? "💬 Discord: " + esc(disc) + "\n" : "") +
+    (pair.url ? "\n📊 " + pair.url : "") +
+    FOOTER
+  );
+}
+
+async function buildDexPaidText(ca) {
+  let paid;
+  if (isEvmCa(ca)) {
+    const chain = await detectEvmChain(ca);
+    if (chain === "arc") paid = await dexArcPaid(ca);
+    else paid = await dexRhPaid(ca);
+  } else {
+    paid = await dexPaid(ca);
+  }
+  // fallback direct
+  if (!paid || !paid.ok) {
+    const slug = isEvmCa(ca) ? "ethereum" : "solana";
+    const r = await jget("https://api.dexscreener.com/orders/v1/" + (isEvmCa(ca) ? "solana" : "solana") + "/" + ca);
+    // try solana path always for sol; for evm try latest
+    const r2 = await jget("https://api.dexscreener.com/orders/v1/solana/" + ca);
+    const orders = (r2.data && (Array.isArray(r2.data) ? r2.data : r2.data.orders)) || [];
+    const lines = orders.slice(0, 12).map((o, i) => {
+      const when = toDate(o.paymentTimestamp);
+      return (
+        i + 1 + ". <b>" + esc(o.type || "?") + "</b> · " +
+        esc(o.status || "n/a") +
+        (when ? " · " + utc(when) : "")
+      );
+    });
+    const pair = await dexPairForCa(ca);
+    const boosts = pair && pair.boosts && pair.boosts.active;
+    return (
+      "🧾 <b>DEX Paid Data</b>\n" +
+      "<code>" + esc(ca) + "</code>\n\n" +
+      "🚀 Boosts: " + (boosts != null ? String(boosts) : "n/a") + "\n\n" +
+      (lines.length ? lines.join("\n") : "No paid orders found.") +
+      FOOTER
+    );
+  }
+  const lines = (paid.orders || []).slice(0, 12).map((o, i) => {
+    return (
+      i + 1 + ". <b>" + esc(o.type || "?") + "</b> · " +
+      esc(o.status || "n/a") +
+      (o.when ? " · " + utc(o.when) : "") +
+      (o.live ? " · ✅" : "")
+    );
+  });
+  return (
+    "🧾 <b>DEX Paid Data</b>\n" +
+    "<code>" + esc(ca) + "</code>\n\n" +
+    "Profile paid: " + (paid.profilePaid ? "✅" : "❌") + "\n" +
+    "Ad paid: " + (paid.adPaid ? "✅" : "❌") + "\n" +
+    (paid.firstPay ? "First pay: " + utc(paid.firstPay) + "\n" : "") +
+    "\n" + (lines.length ? lines.join("\n") : "No orders.") +
+    FOOTER
+  );
+}
+
+async function buildPriceText(caOrQ) {
+  const hit = extractAnyCa(caOrQ);
+  let pair = null;
+  if (hit.ca) {
+    pair = await dexPairForCa(hit.ca);
+  } else {
+    const r = await jget("https://api.dexscreener.com/latest/dex/search?q=" + encodeURIComponent(caOrQ));
+    const pairs = (r.data && r.data.pairs) || [];
+    pair = pairs[0] || null;
+  }
+  if (!pair) return "❌ Not found.\nQuery: " + esc(caOrQ) + FOOTER;
+  const bt = pair.baseToken || {};
+  const price = pair.priceUsd;
+  const ch5 = pair.priceChange && pair.priceChange.m5;
+  const ch1 = pair.priceChange && pair.priceChange.h1;
+  const ch24 = pair.priceChange && pair.priceChange.h24;
+  const liq = pair.liquidity && pair.liquidity.usd;
+  const vol = pair.volume && pair.volume.h24;
+  const mc = pair.marketCap || pair.fdv;
+  return (
+    "💵 <b>Price</b>\n" +
+    "<b>" + esc(bt.name || "") + " (" + esc(bt.symbol || "") + ")</b>\n" +
+    "<code>" + esc(bt.address || hit.ca || "") + "</code>\n\n" +
+    "Price: <b>$" + esc(String(price ?? "n/a")) + "</b>\n" +
+    "5m: " + pct(ch5) + " · 1h: " + pct(ch1) + " · 24h: " + pct(ch24) + "\n" +
+    "Liq: " + money(liq) + " · Vol24: " + money(vol) + "\n" +
+    "MC: " + money(mc) + "\n" +
+    (pair.url ? "\n📊 " + pair.url : "") +
+    FOOTER
+  );
+}
+
+async function buildChartText(caOrQ) {
+  const hit = extractAnyCa(caOrQ);
+  let pair = null;
+  if (hit.ca) pair = await dexPairForCa(hit.ca);
+  else {
+    const r = await jget("https://api.dexscreener.com/latest/dex/search?q=" + encodeURIComponent(caOrQ));
+    pair = ((r.data && r.data.pairs) || [])[0] || null;
+  }
+  if (!pair) return "❌ Chart not found.\n" + esc(caOrQ) + FOOTER;
+  const bt = pair.baseToken || {};
+  const url = pair.url || ("https://dexscreener.com/" + (pair.chainId || "solana") + "/" + (pair.pairAddress || bt.address));
+  return (
+    "📈 <b>Chart</b>\n" +
+    "<b>" + esc(bt.name || "") + " (" + esc(bt.symbol || "") + ")</b>\n" +
+    "<code>" + esc(bt.address || "") + "</code>\n\n" +
+    "Price: $" + esc(String(pair.priceUsd ?? "n/a")) + "\n" +
+    "MC: " + money(pair.marketCap || pair.fdv) + "\n" +
+    "Liq: " + money(pair.liquidity && pair.liquidity.usd) + "\n\n" +
+    "🔗 <a href=\"" + esc(url) + "\">Open DexScreener Chart</a>" +
+    FOOTER
+  );
+}
+
+async function buildSearchText(q) {
+  if (!q) return "Usage: /s TOKEN_NAME or CA" + FOOTER;
+  const r = await jget("https://api.dexscreener.com/latest/dex/search?q=" + encodeURIComponent(q));
+  const pairs = ((r.data && r.data.pairs) || []).slice(0, 8);
+  if (!pairs.length) return "❌ No results for <b>" + esc(q) + "</b>" + FOOTER;
+  const lines = pairs.map((p, i) => {
+    const bt = p.baseToken || {};
+    return (
+      i + 1 + ". <b>" + esc(bt.name || "") + " (" + esc(bt.symbol || "") + ")</b>\n" +
+      "<code>" + esc(bt.address || "") + "</code>\n" +
+      "MC " + money(p.marketCap || p.fdv) + " · Liq " + money(p.liquidity && p.liquidity.usd) +
+      " · " + esc(p.chainId || "")
+    );
+  });
+  return "🔎 <b>Search</b> · " + esc(q) + "\n\n" + lines.join("\n\n") + FOOTER;
+}
+
+async function buildTopCoinsText() {
+  const r = await jget("https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=15&page=1&sparkline=false");
+  const list = Array.isArray(r.data) ? r.data : [];
+  if (!list.length) return "❌ Could not load top coins." + FOOTER;
+  const lines = list.map((c, i) => {
+    const ch = c.price_change_percentage_24h;
+    const sign = ch >= 0 ? "+" : "";
+    return (
+      i + 1 + ". <b>" + esc(c.symbol && c.symbol.toUpperCase()) + "</b> " + esc(c.name) +
+      " · $" + Number(c.current_price).toLocaleString("en-US", { maximumFractionDigits: 6 }) +
+      " · " + sign + (ch != null ? ch.toFixed(2) : "n/a") + "%"
+    );
+  });
+  return "🏆 <b>Top Coins</b> (CoinGecko)\n\n" + lines.join("\n") + FOOTER;
+}
+
+async function buildConvertText(raw) {
+  // /v 1 SOL USDC  or  /v 100 PEPE
+  const parts = String(raw || "").trim().split(/\s+/).filter(Boolean);
+  if (parts.length < 2) {
+    return "Usage: /v AMOUNT TOKEN [TO]\nExamples:\n/v 1 SOL\n/v 100 PEPE USDC" + FOOTER;
+  }
+  const amount = Number(parts[0]);
+  const from = parts[1].toUpperCase();
+  const to = (parts[2] || "USD").toUpperCase();
+  if (!Number.isFinite(amount)) return "❌ Bad amount." + FOOTER;
+  // try coingecko simple
+  const idMap = { SOL: "solana", BTC: "bitcoin", ETH: "ethereum", USDC: "usd-coin", USDT: "tether", BNB: "binancecoin" };
+  const fromId = idMap[from] || from.toLowerCase();
+  const toId = to === "USD" || to === "USDT" || to === "USDC" ? "usd" : (idMap[to] || to.toLowerCase());
+  const r = await jget(
+    "https://api.coingecko.com/api/v3/simple/price?ids=" +
+      encodeURIComponent(fromId) +
+      "&vs_currencies=" +
+      encodeURIComponent(toId === "usd" ? "usd" : toId)
+  );
+  const price = r.data && r.data[fromId] && (r.data[fromId][toId] ?? r.data[fromId].usd);
+  if (price == null) {
+    // fallback search dexscreener
+    const ds = await jget("https://api.dexscreener.com/latest/dex/search?q=" + encodeURIComponent(from));
+    const pair = ((ds.data && ds.data.pairs) || [])[0];
+    if (pair && pair.priceUsd) {
+      const usd = amount * Number(pair.priceUsd);
+      return (
+        "💱 <b>Convert</b>\n" +
+        amount + " " + esc(from) + " ≈ <b>" + money(usd) + "</b>\n" +
+        "(via DexScreener " + esc(pair.baseToken && pair.baseToken.symbol) + ")" +
+        FOOTER
+      );
+    }
+    return "❌ Could not price " + esc(from) + FOOTER;
+  }
+  const out = amount * Number(price);
+  return (
+    "💱 <b>Convert</b>\n" +
+    amount + " " + esc(from) + " ≈ <b>" +
+    (toId === "usd" ? money(out) : out.toFixed(6) + " " + to) +
+    "</b>" +
+    FOOTER
+  );
+}
+
+async function buildPolyText(q) {
+  if (!q) return "Usage: /poly SEARCH_TERM\nExample: /poly trump" + FOOTER;
+  const r = await jget("https://gamma-api.polymarket.com/public-search?q=" + encodeURIComponent(q));
+  const events = (r.data && (r.data.events || r.data)) || [];
+  const list = Array.isArray(events) ? events.slice(0, 8) : [];
+  if (!list.length) {
+    // alternate endpoint
+    const r2 = await jget("https://gamma-api.polymarket.com/events?closed=false&limit=10&title=" + encodeURIComponent(q));
+    const list2 = Array.isArray(r2.data) ? r2.data.slice(0, 8) : [];
+    if (!list2.length) return "❌ No Polymarket results for <b>" + esc(q) + "</b>" + FOOTER;
+    const lines = list2.map((e, i) => {
+      return (
+        i + 1 + ". <b>" + esc(e.title || e.question || "market") + "</b>\n" +
+        (e.slug ? "https://polymarket.com/event/" + e.slug : "")
+      );
+    });
+    return "🎲 <b>Polymarket</b> · " + esc(q) + "\n\n" + lines.join("\n\n") + FOOTER;
+  }
+  const lines = list.map((e, i) => {
+    return (
+      i + 1 + ". <b>" + esc(e.title || e.question || "market") + "</b>\n" +
+      (e.slug ? "https://polymarket.com/event/" + e.slug : (e.id ? "id " + e.id : ""))
+    );
+  });
+  return "🎲 <b>Polymarket</b> · " + esc(q) + "\n\n" + lines.join("\n\n") + FOOTER;
+}
+
+async function buildTopHoldersText(ca) {
+  if (isEvmCa(ca)) {
+    const chain = await detectEvmChain(ca);
+    if (chain === "arc") return buildArcHolders(ca);
+    return buildRhHolders(ca);
+  }
+  // Solana via SolanaTracker or dexscreener fallback
+  if (ST_KEY) {
+    const data = await st("/tokens/" + ca + "/holders?limit=15");
+    const holders = (data && (data.holders || data.data || data)) || [];
+    const list = Array.isArray(holders) ? holders.slice(0, 15) : [];
+    if (list.length) {
+      const lines = list.map((h, i) => {
+        const addr = h.wallet || h.address || h.owner || h.account || "";
+        const pctH = h.percentage ?? h.pct ?? h.percent;
+        const amt = h.amount ?? h.balance ?? h.uiAmount;
+        return (
+          i + 1 + ". <code>" + esc(short(addr)) + "</code>" +
+          (pctH != null ? " · " + Number(pctH).toFixed(2) + "%" : "") +
+          (amt != null ? " · " + String(amt) : "")
+        );
+      });
+      return "👛 <b>Top Holders</b>\n<code>" + esc(ca) + "</code>\n\n" + lines.join("\n") + FOOTER;
+    }
+  }
+  return (
+    "👛 <b>Top Holders</b>\n<code>" + esc(ca) + "</code>\n\n" +
+    "Detailed holder list needs SOLANA_TRACKER_KEY.\n" +
+    "Tip: use full CA scan (paste CA) for concentration & lore." +
+    FOOTER
+  );
+}
+
+async function buildTopTradersText(ca) {
+  if (!isCa(ca) || isEvmCa(ca)) {
+    return "Usage: /tt CA   (Solana)\nTop traders needs SolanaTracker." + FOOTER;
+  }
+  if (!ST_KEY) {
+    return "❌ Add SOLANA_TRACKER_KEY for top traders.\n<code>" + esc(ca) + "</code>" + FOOTER;
+  }
+  const data = await st("/tokens/" + ca + "/top-traders?limit=12");
+  const list = (data && (data.traders || data.data || data)) || [];
+  const rows = Array.isArray(list) ? list.slice(0, 12) : [];
+  if (!rows.length) return "❌ No top traders data.\n<code>" + esc(ca) + "</code>" + FOOTER;
+  const lines = rows.map((t, i) => {
+    const addr = t.wallet || t.address || t.owner || "";
+    const pnl = t.pnl ?? t.realized ?? t.total;
+    const vol = t.volume ?? t.vol;
+    return (
+      i + 1 + ". <code>" + esc(short(addr)) + "</code>" +
+      (pnl != null ? " · PnL " + money(pnl) : "") +
+      (vol != null ? " · Vol " + money(vol) : "")
+    );
+  });
+  return "🧠 <b>Top Traders</b>\n<code>" + esc(ca) + "</code>\n\n" + lines.join("\n") + FOOTER;
+}
+
+async function buildTopWalletsText(ca) {
+  // alias of top traders / holders hybrid
+  if (!ca) return "Usage: /tw CA" + FOOTER;
+  return buildTopTradersText(ca);
+}
+
+function buildLastCallsText(chat) {
+  const chatId = chat && chat.id;
+  const rows = store.calls
+    .filter((c) => !chatId || String(c.chatId) === String(chatId))
+    .slice()
+    .sort((a, b) => Number(b.calledAt) - Number(a.calledAt))
+    .slice(0, 10);
+  if (!rows.length) return "📞 <b>Last 10 Calls</b>\n\nNo calls recorded in this chat yet.\nPaste a CA to start tracking." + FOOTER;
+  const lines = rows.map((c, i) => {
+    const who = c.username ? "@" + c.username : c.name || ("id" + c.userId);
+    return (
+      i + 1 + ". <code>" + esc(short(c.ca)) + "</code>\n" +
+      "by " + esc(who) + " · " + utc(toDate(c.calledAt))
+    );
+  });
+  return "📞 <b>Last 10 Calls</b>\n\n" + lines.join("\n\n") + FOOTER;
+}
+
+function buildFirstCallerText(chat, ca) {
+  if (!ca) return "Usage: /fc CA" + FOOTER;
+  const chatId = chat && chat.id;
+  const rows = store.calls
+    .filter((c) => c.ca === ca && (!chatId || String(c.chatId) === String(chatId)))
+    .sort((a, b) => Number(a.calledAt) - Number(b.calledAt));
+  if (!rows.length) {
+    return (
+      "🏁 <b>First Caller</b>\n<code>" + esc(ca) + "</code>\n\n" +
+      "No calls recorded for this CA in this chat." +
+      FOOTER
+    );
+  }
+  const f = rows[0];
+  const who = f.username ? "@" + f.username : f.name || ("id" + f.userId);
+  return (
+    "🏁 <b>First Caller</b>\n" +
+    "<code>" + esc(ca) + "</code>\n\n" +
+    "Caller: <b>" + esc(who) + "</b>\n" +
+    "When: " + utc(toDate(f.calledAt)) + "\n" +
+    "Total calls on CA: " + rows.length +
+    FOOTER
+  );
+}
+
+function buildExportLbText(chat) {
+  const period = "all";
+  const text = buildLeaderboard(chat, period in PERIODS ? period : "1w");
+  return (
+    "📤 <b>Export Leaderboard</b>\n\n" +
+    text +
+    "\n\n<i>Copy this message or screenshot to export.</i>"
+  );
+}
+
+async function buildGroupPnlText(chat) {
+  const chatId = chat && chat.id;
+  const rows = store.calls
+    .filter((c) => !chatId || String(c.chatId) === String(chatId))
+    .slice()
+    .sort((a, b) => Number(b.calledAt) - Number(a.calledAt))
+    .slice(0, 25);
+  if (!rows.length) return "📊 <b>Group PnL</b>\n\nNo calls yet." + FOOTER;
+  // best effort: use dexscreener ath vs call time is hard without historical; show call count + unique
+  const uniq = new Set(rows.map((r) => r.ca));
+  const callers = new Set(rows.map((r) => r.userId));
+  return (
+    "📊 <b>Group PnL Snapshot</b>\n\n" +
+    "Recent calls sampled: " + rows.length + "\n" +
+    "Unique tokens: " + uniq.size + "\n" +
+    "Unique callers: " + callers.size + "\n\n" +
+    "Use /pnl CA for per-token call cards.\n" +
+    "Use /lb for ranked caller performance." +
+    FOOTER
+  );
+}
+
+async function buildCtosText() {
+  // Community takeovers from recent dexscreener is limited; use pump search + message
+  return (
+    "🏴 <b>CTOs (Community Takeovers)</b> · last 24h\n\n" +
+    "Live CTO feed depends on DexScreener order stream.\n" +
+    "Tip: paste a CA and open <b>DEX Paid</b> (/dp) — type <code>communityTakeover</code> shows there.\n\n" +
+    "Also check /tren for trenches activity." +
+    FOOTER
+  );
+}
+
+async function buildTrenchesText() {
+  // pump.fun advanced search for recent
+  try {
+    const list = await pumpSearch({ limit: 12, sort: "last_trade_timestamp", order: "DESC" });
+    const rows = (list || []).slice(0, 12);
+    if (!rows.length) {
+      return (
+        "🪖 <b>Trenches</b>\n\n" +
+        "No live trench feed right now.\nPaste a CA for full scan." +
+        FOOTER
+      );
+    }
+    const lines = rows.map((c, i) => {
+      const mc = c.usd_market_cap || c.market_cap;
+      return (
+        i + 1 + ". <b>" + esc(c.name || "") + " (" + esc(c.symbol || "") + ")</b>\n" +
+        "<code>" + esc(c.mint || "") + "</code>\n" +
+        "MC " + money(mc) + (c.complete ? " · bonded" : " · bonding")
+      );
+    });
+    return "🪖 <b>Trenches</b> · recent Pump.fun\n\n" + lines.join("\n\n") + FOOTER;
+  } catch (_) {
+    return "🪖 <b>Trenches</b>\n\nFeed unavailable. Paste a CA for full scan." + FOOTER;
+  }
+}
+
+async function buildXtText() {
+  if (!X_BEARER) {
+    return (
+      "🐦 <b>Trending Tweets</b>\n\n" +
+      "Set X_BEARER for live X search.\n" +
+      "Meanwhile paste an X post link for full scan (/x)." +
+      FOOTER
+    );
+  }
+  const r = await xApi("/2/tweets/search/recent?query=solana%20OR%20pumpfun%20OR%20%22ca%3A%22%20-is%3Aretweet&max_results=10&tweet.fields=created_at,public_metrics,author_id");
+  if (!r.ok || !r.data || !r.data.data) {
+    return "❌ " + xApiErr(r) + FOOTER;
+  }
+  const tweets = r.data.data.slice(0, 8);
+  const lines = tweets.map((t, i) => {
+    const m = t.public_metrics || {};
+    return (
+      i + 1 + ". " + esc(String(t.text || "").slice(0, 140)) + "\n" +
+      "❤️ " + (m.like_count ?? 0) + " · 🔁 " + (m.retweet_count ?? 0) +
+      " · https://x.com/i/status/" + t.id
+    );
+  });
+  return "🐦 <b>Trending crypto tweets</b>\n\n" + lines.join("\n\n") + FOOTER;
+}
+
+async function buildDomainLookup(raw) {
+  const domain = extractSnsName(raw) || String(raw || "").trim().toLowerCase();
+  if (!domain) return "Usage: /do name.sol   or   /do name.sns" + FOOTER;
+  const ca = await resolveSnsDomain(domain.includes(".") ? domain : domain + ".sol");
+  if (!ca) return "❌ Could not resolve <b>" + esc(domain) + "</b>" + FOOTER;
+  return (
+    "🌐 <b>Domain Lookup</b>\n" +
+    "<b>" + esc(domain) + "</b>\n" +
+    "→ <code>" + esc(ca) + "</code>\n\n" +
+    "Use /wallet " + esc(ca) + " for full wallet stats." +
+    FOOTER
+  );
+}
+
+async function buildNarrativeText(ca) {
+  if (isEvmCa(ca)) {
+    const chain = await detectEvmChain(ca);
+    if (chain === "arc") return buildArcLore(ca);
+    return buildRhLore(ca);
+  }
+  // solana: reuse lore section from report-ish
+  try {
+    if (typeof buildLore === "function") return await buildLore(ca);
+  } catch (_) {}
+  // fallback: pull description from dexscreener + pump
+  const pair = await dexPairForCa(ca);
+  const pump = await soft(pumpCoin(ca));
+  const desc =
+    (pump && (pump.description || pump.desc)) ||
+    (pair && pair.info && pair.info.imageUrl && "") ||
+    "";
+  const name = (pair && pair.baseToken && pair.baseToken.name) || (pump && pump.name) || "";
+  const sym = (pair && pair.baseToken && pair.baseToken.symbol) || (pump && pump.symbol) || "";
+  return (
+    "📖 <b>Narrative</b>\n" +
+    "<b>" + esc(name) + " (" + esc(sym) + ")</b>\n" +
+    "<code>" + esc(ca) + "</code>\n\n" +
+    (desc ? esc(String(desc).slice(0, 800)) : "No on-chain narrative text found. Use full CA scan for lore score.") +
+    FOOTER
+  );
+}
+
+/* ── command registrations ── */
+
+bot.command("help", (ctx) =>
+  ctx.reply(WELCOME + "\n\n📋 <b>Full menu</b>\nType / to open the command list.", {
+    parse_mode: "HTML",
+    link_preview_options: { is_disabled: true },
+  })
+);
+
+bot.command("c", async (ctx) => {
+  const q = argText(ctx);
+  if (!q) return ctx.reply("Usage: /c CA or TOKEN");
+  touchGroup(ctx.chat);
+  const msg = await ctx.reply("📈 Building chart...");
+  try {
+    const text = await buildChartText(q);
+    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, text, {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+    });
+  } catch (e) {
+    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, "Error: " + (e.message || "fail"));
+  }
+});
+
+bot.command("th", async (ctx) => {
+  const hit = needCa(ctx);
+  if (!hit.ca) return ctx.reply("Usage: /th CA");
+  touchGroup(ctx.chat);
+  const msg = await ctx.reply("👛 Top holders...");
+  try {
+    const text = await buildTopHoldersText(hit.ca);
+    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, text, {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+    });
+  } catch (e) {
+    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, "Error: " + (e.message || "fail"));
+  }
+});
+
+bot.command("nar", async (ctx) => {
+  const hit = needCa(ctx);
+  if (!hit.ca) return ctx.reply("Usage: /nar CA");
+  touchGroup(ctx.chat);
+  const msg = await ctx.reply("📖 Narrative...");
+  try {
+    const text = await buildNarrativeText(hit.ca);
+    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, text, {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+    });
+  } catch (e) {
+    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, "Error: " + (e.message || "fail"));
+  }
+});
+
+bot.command("soc", async (ctx) => {
+  const hit = needCa(ctx);
+  if (!hit.ca) return ctx.reply("Usage: /soc CA");
+  touchGroup(ctx.chat);
+  const msg = await ctx.reply("🔗 Socials...");
+  try {
+    const text = await buildSocialsText(hit.ca);
+    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, text, {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+    });
+  } catch (e) {
+    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, "Error: " + (e.message || "fail"));
+  }
+});
+
+bot.command("dp", async (ctx) => {
+  const hit = needCa(ctx);
+  if (!hit.ca) return ctx.reply("Usage: /dp CA");
+  touchGroup(ctx.chat);
+  const msg = await ctx.reply("🧾 DEX paid...");
+  try {
+    const text = await buildDexPaidText(hit.ca);
+    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, text, {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+    });
+  } catch (e) {
+    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, "Error: " + (e.message || "fail"));
+  }
+});
+
+bot.command("dapp", async (ctx) => {
+  await ctx.reply(
+    "🧩 <b>VEXLORE DApp</b>\n\n" +
+      "🌐 <a href=\"https://vexlore.xyz\">vexlore.xyz</a>\n" +
+      "🤖 Bot: <a href=\"https://t.me/VexloreBOT\">@VexloreBOT</a>\n" +
+      "🏠 Community: <a href=\"https://t.me/VEXLORECOMM\">VEXLORECOMM</a>" +
+      FOOTER,
+    { parse_mode: "HTML", link_preview_options: { is_disabled: true } }
+  );
+});
+
+bot.command("ta", async (ctx) => {
+  const hit = needCa(ctx);
+  if (!hit.ca || isEvmCa(hit.ca)) return ctx.reply("Usage: /ta CA   (Solana analysis card)");
+  // reuse analysis command path
+  touchGroup(ctx.chat);
+  await ctx.reply("🧠 Building technical analysis...");
+  try {
+    const card = await buildAnalysisCard(hit.ca);
+    if (card.error) return ctx.reply(card.error, { parse_mode: "HTML" });
+    const sent = await ctx.replyWithPhoto(new InputFile(card.buffer, "vexlore-analysis.png"), {
+      caption:
+        "🧠 <b>VEXLORE analysis</b> · score " +
+        card.score +
+        "/100 · " +
+        esc(card.grade) +
+        " · " +
+        esc(card.ogTag) +
+        "\n<code>" +
+        esc(hit.ca) +
+        "</code>" +
+        FOOTER,
+      parse_mode: "HTML",
+      reply_markup: typeof analysisKeyboard === "function" ? analysisKeyboard(hit.ca) : undefined,
+    });
+    rememberOwner(ctx.chat.id, sent.message_id, ctx.from && ctx.from.id);
+  } catch (e) {
+    await ctx.reply("Analysis failed: " + (e && e.message ? e.message : "fail") + FOOTER);
+  }
+});
+
+bot.command("calls", async (ctx) => {
+  touchGroup(ctx.chat);
+  const text = buildLastCallsText(ctx.chat);
+  await ctx.reply(text, { parse_mode: "HTML", link_preview_options: { is_disabled: true } });
+});
+
+bot.command("elb", async (ctx) => {
+  touchGroup(ctx.chat);
+  const text = buildExportLbText(ctx.chat);
+  await ctx.reply(text, {
+    parse_mode: "HTML",
+    link_preview_options: { is_disabled: true },
+    reply_markup: typeof lbKeyboard === "function" ? lbKeyboard("1w") : undefined,
+  });
+});
+
+bot.command("gpnl", async (ctx) => {
+  touchGroup(ctx.chat);
+  const text = await buildGroupPnlText(ctx.chat);
+  await ctx.reply(text, { parse_mode: "HTML", link_preview_options: { is_disabled: true } });
+});
+
+bot.command("fc", async (ctx) => {
+  const hit = needCa(ctx);
+  if (!hit.ca) return ctx.reply("Usage: /fc CA");
+  touchGroup(ctx.chat);
+  const text = buildFirstCallerText(ctx.chat, hit.ca);
+  await ctx.reply(text, { parse_mode: "HTML", link_preview_options: { is_disabled: true } });
+});
+
+bot.command("p", async (ctx) => {
+  const q = argText(ctx);
+  if (!q) return ctx.reply("Usage: /p CA or SYMBOL");
+  touchGroup(ctx.chat);
+  const msg = await ctx.reply("💵 Price...");
+  try {
+    const text = await buildPriceText(q);
+    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, text, {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+    });
+  } catch (e) {
+    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, "Error: " + (e.message || "fail"));
+  }
+});
+
+bot.command("hm", async (ctx) => {
+  await ctx.reply(
+    "🔥 <b>Crypto Market Heatmap</b>\n\n" +
+      "🔗 <a href=\"https://coinbubble.live/\">CoinBubble</a>\n" +
+      "🔗 <a href=\"https://abs.xyz/heatmap\">abs.xyz heatmap</a>\n" +
+      "🔗 <a href=\"https://coingecko.com/en/charts\">CoinGecko Charts</a>" +
+      FOOTER,
+    { parse_mode: "HTML", link_preview_options: { is_disabled: true } }
+  );
+});
+
+bot.command("hms", async (ctx) => {
+  await ctx.reply(
+    "🇺🇸 <b>US Stock Heatmap</b>\n\n" +
+      "🔗 <a href=\"https://finviz.com/map.ashx\">Finviz Map</a>\n" +
+      "🔗 <a href=\"https://www.tradingview.com/heatmap/stock/\">TradingView Stock Heatmap</a>" +
+      FOOTER,
+    { parse_mode: "HTML", link_preview_options: { is_disabled: true } }
+  );
+});
+
+bot.command("rekt", async (ctx) => {
+  await ctx.reply(
+    "💥 <b>Liquidation Heatmap</b>\n\n" +
+      "🔗 <a href=\"https://www.coinglass.com/LiquidationData\">CoinGlass Liquidations</a>\n" +
+      "🔗 <a href=\"https://www.coinglass.com/pro/futures/LiquidationHeatMap\">Liquidation Heatmap</a>" +
+      FOOTER,
+    { parse_mode: "HTML", link_preview_options: { is_disabled: true } }
+  );
+});
+
+bot.command("i", async (ctx) => {
+  const msg = await ctx.reply("🏆 Top coins...");
+  try {
+    const text = await buildTopCoinsText();
+    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, text, {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+    });
+  } catch (e) {
+    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, "Error: " + (e.message || "fail"));
+  }
+});
+
+bot.command("v", async (ctx) => {
+  const text = await buildConvertText(argText(ctx));
+  await ctx.reply(text, { parse_mode: "HTML", link_preview_options: { is_disabled: true } });
+});
+
+bot.command("tw", async (ctx) => {
+  const hit = needCa(ctx);
+  if (!hit.ca) return ctx.reply("Usage: /tw CA");
+  touchGroup(ctx.chat);
+  const msg = await ctx.reply("👛 Top wallets...");
+  try {
+    const text = await buildTopWalletsText(hit.ca);
+    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, text, {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+    });
+  } catch (e) {
+    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, "Error: " + (e.message || "fail"));
+  }
+});
+
+bot.command("tt", async (ctx) => {
+  const hit = needCa(ctx);
+  if (!hit.ca) return ctx.reply("Usage: /tt CA");
+  touchGroup(ctx.chat);
+  const msg = await ctx.reply("🧠 Top traders...");
+  try {
+    const text = await buildTopTradersText(hit.ca);
+    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, text, {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+    });
+  } catch (e) {
+    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, "Error: " + (e.message || "fail"));
+  }
+});
+
+bot.command("ws", async (ctx) => {
+  // alias of /wallet
+  const text = argText(ctx);
+  if (!text) {
+    return ctx.reply(
+      "Usage: /ws SOLANA_WALLET | name.sol | eth|bnb|rh|arc 0x… | trx T…"
+    );
+  }
+  // reuse wallet command logic by simulating
+  touchGroup(ctx.chat);
+  const chainHint = extractWalletChainHint("/wallet " + text);
+  const resolved = await resolveWalletTarget(text);
+  const ca = resolved.ca || extractAnyCa(text).ca || extractTrxCa(text);
+  if (!ca) return ctx.reply("❌ Could not parse wallet.");
+  const msg = await ctx.reply("👛 Wallet stats...");
+  rememberOwner(ctx.chat.id, msg.message_id, ctx.from && ctx.from.id);
+  try {
+    const out = await buildWallet(ca, resolved.domain || "", chainHint || (isEvmCa(ca) ? "eth" : isTrxCa(ca) ? "trx" : "sol"));
+    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, out, {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+      reply_markup: kbWallet(ca, chainHint || "sol"),
+    });
+  } catch (e) {
+    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, "Error: " + (e.message || "fail"));
+  }
+});
+
+bot.command("s", async (ctx) => {
+  const q = argText(ctx);
+  if (!q) return ctx.reply("Usage: /s TOKEN or CA");
+  touchGroup(ctx.chat);
+  const msg = await ctx.reply("🔎 Searching...");
+  try {
+    const text = await buildSearchText(q);
+    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, text, {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+    });
+  } catch (e) {
+    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, "Error: " + (e.message || "fail"));
+  }
+});
+
+bot.command("poly", async (ctx) => {
+  const q = argText(ctx);
+  const msg = await ctx.reply("🎲 Polymarket...");
+  try {
+    const text = await buildPolyText(q);
+    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, text, {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+    });
+  } catch (e) {
+    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, "Error: " + (e.message || "fail"));
+  }
+});
+
+bot.command("xt", async (ctx) => {
+  const msg = await ctx.reply("🐦 Trending tweets...");
+  try {
+    const text = await buildXtText();
+    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, text, {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+    });
+  } catch (e) {
+    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, "Error: " + (e.message || "fail"));
+  }
+});
+
+bot.command("ctos", async (ctx) => {
+  const text = await buildCtosText();
+  await ctx.reply(text, { parse_mode: "HTML", link_preview_options: { is_disabled: true } });
+});
+
+bot.command("thesis", async (ctx) => {
+  const hit = needCa(ctx);
+  if (!hit.ca || isEvmCa(hit.ca)) return ctx.reply("Usage: /thesis CA   (Pump.fun / Solana)");
+  touchGroup(ctx.chat);
+  const msg = await ctx.reply("📝 Thesis / callouts...");
+  rememberOwner(ctx.chat.id, msg.message_id, ctx.from && ctx.from.id);
+  try {
+    const text = await buildCallouts(hit.ca);
+    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, text, {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+      reply_markup: typeof kb === "function" ? kb(hit.ca) : undefined,
+    });
+  } catch (e) {
+    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, "Error: " + (e.message || "fail"));
+  }
+});
+
+bot.command("tren", async (ctx) => {
+  const msg = await ctx.reply("🪖 Trenches...");
+  try {
+    const text = await buildTrenchesText();
+    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, text, {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+    });
+  } catch (e) {
+    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, "Error: " + (e.message || "fail"));
+  }
+});
+
+// /gh alias → existing github handlers (git/github already exist)
+bot.command("gh", async (ctx) => {
+  const raw = argText(ctx) || "";
+  const hit = typeof extractGithub === "function" ? extractGithub(raw) : null;
+  if (!hit || !hit.owner) {
+    return ctx.reply("Usage: /gh owner/repo   or   /gh https://github.com/owner/repo");
+  }
+  touchGroup(ctx.chat);
+  await replyGithubScan(ctx, hit.owner, hit.repo, "👾 Scanning GitHub...");
+});
+
+bot.command("do", async (ctx) => {
+  const q = argText(ctx);
+  const msg = await ctx.reply("🌐 Domain lookup...");
+  try {
+    const text = await buildDomainLookup(q);
+    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, text, {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+    });
+  } catch (e) {
+    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, "Error: " + (e.message || "fail"));
+  }
+});
+
+// cluster alias
+bot.command("cluster", async (ctx) => {
+  // reuse bundle
+  const hit = needCa(ctx);
+  if (!hit.ca) return ctx.reply("Usage: /cluster CA");
+  ctx.match = hit.ca;
+  // call bundle path by re-emitting isn't easy; just reply tip
+  if (isEvmCa(hit.ca)) {
+    const chain = await detectEvmChain(hit.ca);
+    const msg = await ctx.reply("📦 Clusters...");
+    try {
+      const text = chain === "arc" ? await buildArcBundle(hit.ca) : await buildRhBundle(hit.ca);
+      await ctx.api.editMessageText(ctx.chat.id, msg.message_id, text, {
+        parse_mode: "HTML",
+        link_preview_options: { is_disabled: true },
+      });
+    } catch (e) {
+      await ctx.api.editMessageText(ctx.chat.id, msg.message_id, "Error: " + (e.message || "fail"));
+    }
+    return;
+  }
+  const msg = await ctx.reply("📦 Clusters...");
+  try {
+    const text = await buildBundle(hit.ca);
+    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, text, {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+      reply_markup: typeof kb === "function" ? kb(hit.ca) : undefined,
+    });
+  } catch (e) {
+    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, "Error: " + (e.message || "fail"));
+  }
+});
+
+
 bot.catch((err) => console.error(err));
 
 (async () => {
@@ -10191,6 +11188,7 @@ bot.catch((err) => console.error(err));
     console.error("setMyDefaultAdministratorRights fail", e.message || e);
   }
 
+  await registerSuperCommands();
   await bot.start();
-  console.log("Bot is running");
+  console.log("Bot is running — SUPER menu active");
 })();
