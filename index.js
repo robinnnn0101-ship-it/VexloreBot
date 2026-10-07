@@ -9025,29 +9025,58 @@ const WELCOME =
   "🪄 <b>Easy start</b>\n" +
   "Just paste a CA, 0x, wallet, GitHub, or X link.\n" +
   "No command needed.\n\n" +
-  "🟣 <b>Solana</b>\n" +
-  "• paste CA → full scan\n" +
-  "• /vamp CA → OG vs copy\n" +
-  "• /bundle CA → bundles\n" +
-  "• /cluster CA → clusters\n" +
-  "• /dev CA → dev book\n" +
-  "• /callouts CA → Pump.fun comments\n" +
-  "• /wallet name.sol → wallet analyser\n" +
-  "• /stonks CA → pad check\n" +
-  "• /lb → group leaderboard\n" +
-  "• /pnl CA → PnL card\n" +
-  "• /analysis CA → full score sheet\n\n" +
+  "📋 <b>Command menu</b> (type / to open)\n\n" +
+  "🟣 <b>Scan & token</b>\n" +
+  "/c CA — chart\n" +
+  "/p CA — price\n" +
+  "/s query — search token\n" +
+  "/th CA — top holders\n" +
+  "/soc CA — socials\n" +
+  "/dp CA — DEX paid data\n" +
+  "/nar CA — narrative\n" +
+  "/ta CA — technical analysis\n" +
+  "/pnl CA — PnL card\n" +
+  "/analysis CA — full score sheet\n" +
+  "/vamp CA — OG vs copy\n" +
+  "/bundle CA — bundles\n" +
+  "/cluster CA — clusters\n" +
+  "/dev CA — deployer history\n" +
+  "/callouts CA — Pump.fun callouts\n" +
+  "/thesis CA — thesis / FOMO\n" +
+  "/stonks CA — pad check\n\n" +
+  "📞 <b>Group / calls</b>\n" +
+  "/lb — leaderboard\n" +
+  "/elb — export leaderboard\n" +
+  "/calls — last 10 calls\n" +
+  "/fc CA — first caller\n" +
+  "/gpnl — group PnL snapshot\n\n" +
+  "👛 <b>Wallets & traders</b>\n" +
+  "/wallet · /ws — wallet stats\n" +
+  "/tw CA — top wallets\n" +
+  "/tt CA — top traders\n" +
+  "/do name.sol — domain lookup\n\n" +
+  "🌍 <b>Markets & extra</b>\n" +
+  "/i — top coins\n" +
+  "/v amount TOKEN — convert\n" +
+  "/hm — crypto heatmap\n" +
+  "/hms — US stock heatmap\n" +
+  "/rekt — liquidation heatmap\n" +
+  "/poly query — Polymarket\n" +
+  "/tren — trenches\n" +
+  "/ctos — CTOs\n" +
+  "/xt — trending tweets\n" +
+  "/x link — X post scan\n" +
+  "/gh repo — GitHub analysis\n" +
+  "/dapp — open DApp\n\n" +
   "🟠 <b>Other chains</b>\n" +
-  "Paste a 0x and I auto-detect.\n" +
-  "Or pick one:\n" +
-  "/rh  ·  /arc  ·  /eth  ·  /bnb  ·  /base  ·  /hype\n\n" +
+  "Paste a 0x — auto detect\n" +
+  "/rh  ·  /arc  ·  /holders  ·  /lore\n\n" +
   "💕 <b>Links</b>\n" +
   "🤖 Bot: <a href=\"https://t.me/VexloreBOT\">t.me/VexloreBOT</a>\n" +
   "🛟 Support: <a href=\"https://t.me/vexloresupport\">t.me/vexloresupport</a>\n" +
   "🏠 Community: <a href=\"https://t.me/VEXLORECOMM\">t.me/VEXLORECOMM</a>\n" +
   "🐦 X: <a href=\"https://x.com/Vexlorebot\">@Vexlorebot</a>\n" +
   "🌐 Web: <a href=\"https://vexlore.xyz\">vexlore.xyz</a>\n\n" +
-  "📋 Type / to open the full super command menu\n" +
   "❤️ Made by Robin with Love";
 
 bot.command("start", (ctx) =>
@@ -9583,589 +9612,6 @@ bot.command("tweet", async (ctx) => {
 
 bot.command("watch", async (ctx) => {
   return ctx.reply("👀 Watch is turned off.");
-});
-
-bot.on("message:text", async (ctx) => {
-  const raw = ctx.message.text.trim();
-  if (raw.startsWith("/")) return;
-
-  const gh = extractGithub(raw);
-  if (gh && gh.owner) {
-    touchGroup(ctx.chat);
-    await replyGithubScan(ctx, gh.owner, gh.repo, "👾 Scanning GitHub...");
-    return;
-  }
-
-  const xp = extractXPost(raw);
-  if (xp && xp.id) {
-    touchGroup(ctx.chat);
-    await replyXScan(ctx, xp.id, "🐦 Scanning X post...", xp.handle);
-    return;
-  }
-
-  const sl = extractStonksLink(raw);
-  if (sl && sl.ca) {
-    touchGroup(ctx.chat);
-    await replyStonksScan(ctx, sl.ca, "📈 Checking StonkFun / stonks.fun...");
-    return;
-  }
-
-  const hit = extractAnyCa(raw);
-  if (!hit.ca) {
-    const domain = extractSnsName(raw);
-    if (!domain) return;
-    touchGroup(ctx.chat);
-    const resolved = await resolveSnsDomain(domain);
-    if (!resolved) {
-      await ctx.reply("❌ Could not resolve " + domain + " to a Solana wallet.");
-      return;
-    }
-    await replyWalletScan(ctx, resolved, "👛 Resolving " + domain + "...", domain);
-    return;
-  }
-
-  touchGroup(ctx.chat);
-
-  if (hit.chain === "rh") {
-    const evmChain = await detectEvmChain(hit.ca);
-    if (evmChain === "arc") {
-      await replyArcScan(ctx, hit.ca, "🟠 Scanning Arc...");
-      return;
-    }
-    await replyRhScan(ctx, hit.ca, "🏦 Scanning Robinhood Chain...");
-    return;
-  }
-  // Pasted Solana CA → always token scan (never auto wallet).
-  // Wallet analyser only via /wallet (or SNS name resolution above).
-  const ca = hit.ca;
-
-  recordCall(ctx, ca).catch(() => {});
-
-  const msg = await ctx.reply("🔍 Scanning...");
-  rememberOwner(ctx.chat.id, msg.message_id, ctx.from && ctx.from.id);
-  try {
-    const report = await buildReport(ca);
-    await finishScanMessage(ctx, msg, report, kb(ca), ca);
-  } catch (e) {
-    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, "Error: " + (e.message || "fail"));
-  }
-});
-
-/* ───────── CALLBACKS ───────── */
-
-bot.callbackQuery(/^lb:(.+)$/, async (ctx) => {
-  const period = ctx.match[1];
-  if (!PERIODS[period]) return ctx.answerCallbackQuery({ text: "Invalid period" });
-  await ctx.answerCallbackQuery({ text: "Updating..." });
-  try {
-    const text = buildLeaderboard(ctx.chat, period);
-    await ctx.editMessageText(text, {
-      parse_mode: "HTML",
-      link_preview_options: { is_disabled: true },
-      reply_markup: lbKeyboard(period),
-    });
-  } catch (_) {
-    await ctx.answerCallbackQuery({ text: "failed" });
-  }
-});
-
-bot.callbackQuery(/^pnlref:(.+)$/, async (ctx) => {
-  const ca = ctx.match[1];
-  await ctx.answerCallbackQuery({ text: "Refreshing PnL..." });
-  try {
-    const card = await buildPnlCard(ctx.chat.id, ca, ctx.from && ctx.from.id);
-    if (card.error) {
-      await ctx.answerCallbackQuery({ text: "no call found", show_alert: true });
-      return;
-    }
-    await ctx.editMessageMedia(
-      {
-        type: "photo",
-        media: new InputFile(card.buffer, "vexlore-pnl.png"),
-      },
-      { reply_markup: pnlKeyboard(ca) }
-    );
-  } catch (_) {
-    await ctx.answerCallbackQuery({ text: "failed" });
-  }
-});
-
-bot.callbackQuery(/^analysisref:(.+)$/, async (ctx) => {
-  const ca = ctx.match[1];
-  await ctx.answerCallbackQuery({ text: "Refreshing analysis..." });
-  try {
-    const card = await buildAnalysisCard(ca);
-    if (card.error) {
-      await ctx.answerCallbackQuery({ text: "failed", show_alert: true });
-      return;
-    }
-    await ctx.editMessageMedia(
-      {
-        type: "photo",
-        media: new InputFile(card.buffer, "vexlore-analysis.png"),
-      },
-      {
-        reply_markup: analysisKeyboard(ca),
-      }
-    );
-  } catch (_) {
-    await ctx.answerCallbackQuery({ text: "failed" });
-  }
-});
-
-bot.callbackQuery(/^analysis:(.+)$/, async (ctx) => {
-  const ca = ctx.match[1];
-  if (!isCa(ca) || isEvmCa(ca)) {
-    return ctx.answerCallbackQuery({ text: "Solana CA only", show_alert: true });
-  }
-  await ctx.answerCallbackQuery({ text: "Building analysis..." });
-  try {
-    const card = await buildAnalysisCard(ca);
-    if (card.error) {
-      await ctx.reply(card.error, { parse_mode: "HTML", link_preview_options: { is_disabled: true } });
-      return;
-    }
-    const sent = await ctx.replyWithPhoto(new InputFile(card.buffer, "vexlore-analysis.png"), {
-      caption:
-        "🧠 <b>VEXLORE analysis</b> · score " +
-        card.score +
-        "/100 · " +
-        esc(card.grade) +
-        " · " +
-        esc(card.ogTag) +
-        "\n<code>" +
-        esc(ca) +
-        "</code>" +
-        FOOTER,
-      parse_mode: "HTML",
-      reply_markup: analysisKeyboard(ca),
-    });
-    rememberOwner(ctx.chat.id, sent.message_id, ctx.from && ctx.from.id);
-  } catch (e) {
-    await ctx.reply("Analysis failed: " + (e && e.message ? e.message : "fail") + FOOTER);
-  }
-});
-bot.callbackQuery(/^ref:(.+)$/, async (ctx) => {
-  const ca = ctx.match[1];
-  if (isEvmCa(ca)) return ctx.answerCallbackQuery({ text: "Use RH refresh" });
-  await ctx.answerCallbackQuery({ text: "Refreshing..." });
-  try {
-    const report = await buildReport(ca);
-    await ctx.editMessageText(report + "\nUpdated: " + utc(new Date()), {
-      parse_mode: "HTML",
-      link_preview_options: { is_disabled: true },
-      reply_markup: kb(ca),
-    });
-  } catch (_) {
-    await ctx.answerCallbackQuery({ text: "failed" });
-  }
-});
-
-bot.callbackQuery(/^vamp:(.+)$/, async (ctx) => {
-  const ca = ctx.match[1];
-  if (isEvmCa(ca)) return ctx.answerCallbackQuery({ text: "Use RH vamp" });
-  await ctx.answerCallbackQuery({ text: "Vamp check..." });
-  try {
-    const text = await buildVamp(ca);
-    await ctx.editMessageText(text, {
-      parse_mode: "HTML",
-      link_preview_options: { is_disabled: true },
-      reply_markup: kb(ca),
-    });
-  } catch (_) {
-    await ctx.answerCallbackQuery({ text: "failed" });
-  }
-});
-
-bot.callbackQuery(/^bundle:(.+)$/, async (ctx) => {
-  const ca = ctx.match[1];
-  if (isEvmCa(ca)) {
-    return ctx.answerCallbackQuery({ text: "Bundle is Solana only", show_alert: true });
-  }
-  await ctx.answerCallbackQuery({ text: "Bundles..." });
-  try {
-    const text = await buildBundle(ca);
-    await ctx.editMessageText(text, {
-      parse_mode: "HTML",
-      link_preview_options: { is_disabled: true },
-      reply_markup: kb(ca),
-    });
-  } catch (_) {
-    await ctx.answerCallbackQuery({ text: "failed" });
-  }
-});
-
-bot.callbackQuery(/^dev:(.+)$/, async (ctx) => {
-  const ca = ctx.match[1];
-  if (isEvmCa(ca)) {
-    return ctx.answerCallbackQuery({ text: "Dev history is Solana only", show_alert: true });
-  }
-  await ctx.answerCallbackQuery({ text: "Dev history..." });
-  try {
-    const text = await buildDev(ca);
-    await ctx.editMessageText(text, {
-      parse_mode: "HTML",
-      link_preview_options: { is_disabled: true },
-      reply_markup: kb(ca),
-    });
-  } catch (_) {
-    await ctx.answerCallbackQuery({ text: "failed" });
-  }
-});
-
-bot.callbackQuery(/^callouts:(.+)$/, async (ctx) => {
-  const ca = ctx.match[1];
-  if (isEvmCa(ca)) {
-    return ctx.answerCallbackQuery({ text: "Callouts are Pump.fun only", show_alert: true });
-  }
-  await ctx.answerCallbackQuery({ text: "Callouts..." });
-  try {
-    const text = await buildCallouts(ca);
-    await ctx.editMessageText(text, {
-      parse_mode: "HTML",
-      link_preview_options: { is_disabled: true },
-      reply_markup: kb(ca),
-    });
-  } catch (_) {
-    await ctx.answerCallbackQuery({ text: "failed" });
-  }
-});
-
-bot.callbackQuery(/^sf:(.+)$/, async (ctx) => {
-  const ca = ctx.match[1];
-  if (isEvmCa(ca)) return ctx.answerCallbackQuery({ text: "Use RH Stonks" });
-  await ctx.answerCallbackQuery({ text: "StonkFun..." });
-  try {
-    const text = await buildStonks(ca);
-    await ctx.editMessageText(text, {
-      parse_mode: "HTML",
-      link_preview_options: { is_disabled: true },
-      reply_markup: kb(ca),
-    });
-  } catch (_) {
-    await ctx.answerCallbackQuery({ text: "failed" });
-  }
-});
-
-bot.callbackQuery(/^rhsf:(.+)$/, async (ctx) => {
-  await ctx.answerCallbackQuery({ text: "stonks.fun..." });
-  try {
-    const text = await buildStonks(ctx.match[1]);
-    await ctx.editMessageText(text, {
-      parse_mode: "HTML",
-      link_preview_options: { is_disabled: true },
-      reply_markup: kbRh(ctx.match[1]),
-    });
-  } catch (_) {
-    await ctx.answerCallbackQuery({ text: "failed" });
-  }
-});
-
-bot.callbackQuery(/^watch:(.+)$/, async (ctx) => {
-  await ctx.answerCallbackQuery({ text: "Watch is turned off", show_alert: true });
-});
-
-bot.callbackQuery(/^wref:(.+)$/, async (ctx) => {
-  const raw = String(ctx.match[1] || "");
-  let chain = "sol";
-  let ca = raw;
-  const m = raw.match(/^(eth|bnb|rh|trx|sol|arc):(.+)$/i);
-  if (m) {
-    chain = m[1].toLowerCase();
-    ca = m[2];
-  }
-  await ctx.answerCallbackQuery({ text: "Wallet refresh..." });
-  try {
-    const text = await buildWallet(ca, "", chain);
-    await ctx.editMessageText(text + "\nUpdated: " + utc(new Date()), {
-      parse_mode: "HTML",
-      link_preview_options: { is_disabled: true },
-      reply_markup: kbWallet(ca, chain),
-    });
-  } catch (_) {
-    await ctx.answerCallbackQuery({ text: "failed" });
-  }
-});
-
-bot.callbackQuery(/^rhref:(.+)$/, async (ctx) => {
-  await ctx.answerCallbackQuery({ text: "RH refresh..." });
-  try {
-    const report = await buildRhReport(ctx.match[1]);
-    await ctx.editMessageText(report + "\nUpdated: " + utc(new Date()), {
-      parse_mode: "HTML",
-      link_preview_options: { is_disabled: true },
-      reply_markup: kbRh(ctx.match[1]),
-    });
-  } catch (_) {
-    await ctx.answerCallbackQuery({ text: "failed" });
-  }
-});
-
-bot.callbackQuery(/^rhvamp:(.+)$/, async (ctx) => {
-  await ctx.answerCallbackQuery({ text: "RH vamp..." });
-  try {
-    const text = await buildRhVamp(ctx.match[1]);
-    await ctx.editMessageText(text, {
-      parse_mode: "HTML",
-      link_preview_options: { is_disabled: true },
-      reply_markup: kbRh(ctx.match[1]),
-    });
-  } catch (_) {
-    await ctx.answerCallbackQuery({ text: "failed" });
-  }
-});
-
-bot.callbackQuery(/^rhbundle:(.+)$/, async (ctx) => {
-  await ctx.answerCallbackQuery({ text: "RH clusters..." });
-  try {
-    const text = await buildRhBundle(ctx.match[1]);
-    await ctx.editMessageText(text, {
-      parse_mode: "HTML",
-      link_preview_options: { is_disabled: true },
-      reply_markup: kbRh(ctx.match[1]),
-    });
-  } catch (_) {
-    await ctx.answerCallbackQuery({ text: "failed" });
-  }
-});
-
-bot.callbackQuery(/^rhhold:(.+)$/, async (ctx) => {
-  await ctx.answerCallbackQuery({ text: "RH holders..." });
-  try {
-    const text = await buildRhHolders(ctx.match[1]);
-    await ctx.editMessageText(text, {
-      parse_mode: "HTML",
-      link_preview_options: { is_disabled: true },
-      reply_markup: kbRh(ctx.match[1]),
-    });
-  } catch (_) {
-    await ctx.answerCallbackQuery({ text: "failed" });
-  }
-});
-
-bot.callbackQuery(/^rhlore:(.+)$/, async (ctx) => {
-  await ctx.answerCallbackQuery({ text: "RH lore..." });
-  try {
-    const text = await buildRhLore(ctx.match[1]);
-    await ctx.editMessageText(text, {
-      parse_mode: "HTML",
-      link_preview_options: { is_disabled: true },
-      reply_markup: kbRh(ctx.match[1]),
-    });
-  } catch (_) {
-    await ctx.answerCallbackQuery({ text: "failed" });
-  }
-});
-
-bot.callbackQuery(/^rhdev:(.+)$/, async (ctx) => {
-  await ctx.answerCallbackQuery({ text: "RH dev..." });
-  try {
-    const text = await buildRhDev(ctx.match[1]);
-    await ctx.editMessageText(text, {
-      parse_mode: "HTML",
-      link_preview_options: { is_disabled: true },
-      reply_markup: kbRh(ctx.match[1]),
-    });
-  } catch (_) {
-    await ctx.answerCallbackQuery({ text: "failed" });
-  }
-});
-
-bot.callbackQuery(/^arcref:(.+)$/, async (ctx) => {
-  await ctx.answerCallbackQuery({ text: "Arc refresh..." });
-  try {
-    const report = await buildArcReport(ctx.match[1]);
-    await ctx.editMessageText(report + "\nUpdated: " + utc(new Date()), {
-      parse_mode: "HTML",
-      link_preview_options: { is_disabled: true },
-      reply_markup: kbArc(ctx.match[1]),
-    });
-  } catch (_) {
-    await ctx.answerCallbackQuery({ text: "failed" });
-  }
-});
-
-bot.callbackQuery(/^arcvamp:(.+)$/, async (ctx) => {
-  await ctx.answerCallbackQuery({ text: "Arc vamp..." });
-  try {
-    const text = await buildArcVamp(ctx.match[1]);
-    await ctx.editMessageText(text, {
-      parse_mode: "HTML",
-      link_preview_options: { is_disabled: true },
-      reply_markup: kbArc(ctx.match[1]),
-    });
-  } catch (_) {
-    await ctx.answerCallbackQuery({ text: "failed" });
-  }
-});
-
-bot.callbackQuery(/^arcbundle:(.+)$/, async (ctx) => {
-  await ctx.answerCallbackQuery({ text: "Arc clusters..." });
-  try {
-    const text = await buildArcBundle(ctx.match[1]);
-    await ctx.editMessageText(text, {
-      parse_mode: "HTML",
-      link_preview_options: { is_disabled: true },
-      reply_markup: kbArc(ctx.match[1]),
-    });
-  } catch (_) {
-    await ctx.answerCallbackQuery({ text: "failed" });
-  }
-});
-
-bot.callbackQuery(/^archold:(.+)$/, async (ctx) => {
-  await ctx.answerCallbackQuery({ text: "Arc holders..." });
-  try {
-    const text = await buildArcHolders(ctx.match[1]);
-    await ctx.editMessageText(text, {
-      parse_mode: "HTML",
-      link_preview_options: { is_disabled: true },
-      reply_markup: kbArc(ctx.match[1]),
-    });
-  } catch (_) {
-    await ctx.answerCallbackQuery({ text: "failed" });
-  }
-});
-
-bot.callbackQuery(/^arclore:(.+)$/, async (ctx) => {
-  await ctx.answerCallbackQuery({ text: "Arc lore..." });
-  try {
-    const text = await buildArcLore(ctx.match[1]);
-    await ctx.editMessageText(text, {
-      parse_mode: "HTML",
-      link_preview_options: { is_disabled: true },
-      reply_markup: kbArc(ctx.match[1]),
-    });
-  } catch (_) {
-    await ctx.answerCallbackQuery({ text: "failed" });
-  }
-});
-
-bot.callbackQuery(/^arcdev:(.+)$/, async (ctx) => {
-  await ctx.answerCallbackQuery({ text: "Arc dev..." });
-  try {
-    const text = await buildArcDev(ctx.match[1]);
-    await ctx.editMessageText(text, {
-      parse_mode: "HTML",
-      link_preview_options: { is_disabled: true },
-      reply_markup: kbArc(ctx.match[1]),
-    });
-  } catch (_) {
-    await ctx.answerCallbackQuery({ text: "failed" });
-  }
-});
-bot.callbackQuery(/^ghref:(.+)$/, async (ctx) => {
-  const job = ghJobs.get(String(ctx.match[1]));
-  if (!job) {
-    return ctx.answerCallbackQuery({
-      text: "Scan expired. Send the GitHub link again.",
-      show_alert: true,
-    });
-  }
-  await ctx.answerCallbackQuery({ text: "GitHub refresh..." });
-  try {
-    const text = await buildGithubReport(job.owner, job.repo);
-    await ctx.editMessageText(text + "\nUpdated: " + utc(new Date()), {
-      parse_mode: "HTML",
-      link_preview_options: { is_disabled: true },
-      reply_markup: kbGh(ctx.match[1]),
-    });
-  } catch (_) {
-    await ctx.answerCallbackQuery({ text: "failed" });
-  }
-});
-
-bot.callbackQuery(/^ghfees:(.+)$/, async (ctx) => {
-  const job = ghJobs.get(String(ctx.match[1]));
-  if (!job) {
-    return ctx.answerCallbackQuery({
-      text: "Scan expired. Send the GitHub link again.",
-      show_alert: true,
-    });
-  }
-  await ctx.answerCallbackQuery({ text: "Pump GitHub fees..." });
-  try {
-    const userRes = await ghGet("/users/" + encodeURIComponent(job.owner));
-    if (!userRes.ok || !userRes.data || !userRes.data.login) {
-      await ctx.editMessageText("❌ GitHub user not found." + FOOTER, {
-        parse_mode: "HTML",
-      });
-      return;
-    }
-      const [feeBook, mentionTokens] = await Promise.all([
-      pumpFeeByGithub(userRes.data.login, userRes.data.id),
-      searchPumpGithubFeeTokens(userRes.data.login),
-    ]);
-    const text =
-      "👾 <b>Pump GitHub fee scan</b>\n" +
-      "<b>" + esc(userRes.data.login) + "</b>\n" +
-      userRes.data.html_url +
-      "\n\n" +
-      pumpGithubFeeBlock(userRes.data, feeBook, mentionTokens) +
-      "\nUpdated: " + utc(new Date()) +
-      FOOTER;
-    await ctx.editMessageText(text.slice(0, 4000), {
-      parse_mode: "HTML",
-      link_preview_options: { is_disabled: true },
-      reply_markup: kbGh(ctx.match[1]),
-    });
-  } catch (_) {
-    await ctx.answerCallbackQuery({ text: "failed" });
-  }
-});
-bot.callbackQuery(/^xref:(.+)$/, async (ctx) => {
-  const job = xJobs.get(String(ctx.match[1]));
-  if (!job || !job.postId) return ctx.answerCallbackQuery({ text: "Scan expired. Send the link again.", show_alert: true });
-  await ctx.answerCallbackQuery({ text: "X refresh..." });
-  try {
-    const text = await buildXReport(job.postId);
-    await ctx.editMessageText(text + "\nUpdated: " + utc(new Date()), {
-      parse_mode: "HTML",
-      link_preview_options: { is_disabled: true },
-      reply_markup: kbX(ctx.match[1]),
-    });
-  } catch (_) {
-    await ctx.answerCallbackQuery({ text: "failed" });
-  }
-});
-
-bot.callbackQuery(/^advertise$/, async (ctx) => {
-  await ctx.answerCallbackQuery({ text: "Coming soon" });
-  try {
-    await ctx.reply(
-      "📢 <b>Advertise on VEXLORE</b>\n\n" +
-        "Coming soon.\n\n" +
-        "Want to be first in line or need this service now?\n" +
-        "Join the community → <a href=\"https://t.me/VEXLORECOMM\">t.me/VEXLORECOMM</a>" +
-        FOOTER,
-      {
-        parse_mode: "HTML",
-        link_preview_options: { is_disabled: true },
-        reply_markup: new InlineKeyboard().url("💬 VEXLORE Community", "https://t.me/VEXLORECOMM"),
-      }
-    );
-  } catch (_) {}
-});
-
-bot.callbackQuery(/^del$/, async (ctx) => {
-  const msg = ctx.callbackQuery && ctx.callbackQuery.message;
-  if (!msg) return ctx.answerCallbackQuery({ text: "failed" });
-
-  const owner = msgOwners.get(ownerKey(msg.chat.id, msg.message_id));
-  if (!owner || String(ctx.from.id) !== String(owner)) {
-    return ctx.answerCallbackQuery({
-      text: "Only the person who posted this CA can delete it",
-      show_alert: true,
-    });
-  }
-
-  try {
-    await ctx.deleteMessage();
-    msgOwners.delete(ownerKey(msg.chat.id, msg.message_id));
-    await ctx.answerCallbackQuery({ text: "Deleted" });
-  } catch (_) {
-    await ctx.answerCallbackQuery({ text: "Can't delete this message" });
-  }
 });
 
 /* ───────── SUPER MENU + EXTRA COMMANDS (from VEXLORE menu screenshots) ───────── */
@@ -11163,6 +10609,590 @@ bot.command("cluster", async (ctx) => {
   }
 });
 
+
+
+bot.on("message:text", async (ctx) => {
+  const raw = ctx.message.text.trim();
+  if (raw.startsWith("/")) return;
+
+  const gh = extractGithub(raw);
+  if (gh && gh.owner) {
+    touchGroup(ctx.chat);
+    await replyGithubScan(ctx, gh.owner, gh.repo, "👾 Scanning GitHub...");
+    return;
+  }
+
+  const xp = extractXPost(raw);
+  if (xp && xp.id) {
+    touchGroup(ctx.chat);
+    await replyXScan(ctx, xp.id, "🐦 Scanning X post...", xp.handle);
+    return;
+  }
+
+  const sl = extractStonksLink(raw);
+  if (sl && sl.ca) {
+    touchGroup(ctx.chat);
+    await replyStonksScan(ctx, sl.ca, "📈 Checking StonkFun / stonks.fun...");
+    return;
+  }
+
+  const hit = extractAnyCa(raw);
+  if (!hit.ca) {
+    const domain = extractSnsName(raw);
+    if (!domain) return;
+    touchGroup(ctx.chat);
+    const resolved = await resolveSnsDomain(domain);
+    if (!resolved) {
+      await ctx.reply("❌ Could not resolve " + domain + " to a Solana wallet.");
+      return;
+    }
+    await replyWalletScan(ctx, resolved, "👛 Resolving " + domain + "...", domain);
+    return;
+  }
+
+  touchGroup(ctx.chat);
+
+  if (hit.chain === "rh") {
+    const evmChain = await detectEvmChain(hit.ca);
+    if (evmChain === "arc") {
+      await replyArcScan(ctx, hit.ca, "🟠 Scanning Arc...");
+      return;
+    }
+    await replyRhScan(ctx, hit.ca, "🏦 Scanning Robinhood Chain...");
+    return;
+  }
+  // Pasted Solana CA → always token scan (never auto wallet).
+  // Wallet analyser only via /wallet (or SNS name resolution above).
+  const ca = hit.ca;
+
+  recordCall(ctx, ca).catch(() => {});
+
+  const msg = await ctx.reply("🔍 Scanning...");
+  rememberOwner(ctx.chat.id, msg.message_id, ctx.from && ctx.from.id);
+  try {
+    const report = await buildReport(ca);
+    await finishScanMessage(ctx, msg, report, kb(ca), ca);
+  } catch (e) {
+    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, "Error: " + (e.message || "fail"));
+  }
+});
+
+/* ───────── CALLBACKS ───────── */
+
+bot.callbackQuery(/^lb:(.+)$/, async (ctx) => {
+  const period = ctx.match[1];
+  if (!PERIODS[period]) return ctx.answerCallbackQuery({ text: "Invalid period" });
+  await ctx.answerCallbackQuery({ text: "Updating..." });
+  try {
+    const text = buildLeaderboard(ctx.chat, period);
+    await ctx.editMessageText(text, {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+      reply_markup: lbKeyboard(period),
+    });
+  } catch (_) {
+    await ctx.answerCallbackQuery({ text: "failed" });
+  }
+});
+
+bot.callbackQuery(/^pnlref:(.+)$/, async (ctx) => {
+  const ca = ctx.match[1];
+  await ctx.answerCallbackQuery({ text: "Refreshing PnL..." });
+  try {
+    const card = await buildPnlCard(ctx.chat.id, ca, ctx.from && ctx.from.id);
+    if (card.error) {
+      await ctx.answerCallbackQuery({ text: "no call found", show_alert: true });
+      return;
+    }
+    await ctx.editMessageMedia(
+      {
+        type: "photo",
+        media: new InputFile(card.buffer, "vexlore-pnl.png"),
+      },
+      { reply_markup: pnlKeyboard(ca) }
+    );
+  } catch (_) {
+    await ctx.answerCallbackQuery({ text: "failed" });
+  }
+});
+
+bot.callbackQuery(/^analysisref:(.+)$/, async (ctx) => {
+  const ca = ctx.match[1];
+  await ctx.answerCallbackQuery({ text: "Refreshing analysis..." });
+  try {
+    const card = await buildAnalysisCard(ca);
+    if (card.error) {
+      await ctx.answerCallbackQuery({ text: "failed", show_alert: true });
+      return;
+    }
+    await ctx.editMessageMedia(
+      {
+        type: "photo",
+        media: new InputFile(card.buffer, "vexlore-analysis.png"),
+      },
+      {
+        reply_markup: analysisKeyboard(ca),
+      }
+    );
+  } catch (_) {
+    await ctx.answerCallbackQuery({ text: "failed" });
+  }
+});
+
+bot.callbackQuery(/^analysis:(.+)$/, async (ctx) => {
+  const ca = ctx.match[1];
+  if (!isCa(ca) || isEvmCa(ca)) {
+    return ctx.answerCallbackQuery({ text: "Solana CA only", show_alert: true });
+  }
+  await ctx.answerCallbackQuery({ text: "Building analysis..." });
+  try {
+    const card = await buildAnalysisCard(ca);
+    if (card.error) {
+      await ctx.reply(card.error, { parse_mode: "HTML", link_preview_options: { is_disabled: true } });
+      return;
+    }
+    const sent = await ctx.replyWithPhoto(new InputFile(card.buffer, "vexlore-analysis.png"), {
+      caption:
+        "🧠 <b>VEXLORE analysis</b> · score " +
+        card.score +
+        "/100 · " +
+        esc(card.grade) +
+        " · " +
+        esc(card.ogTag) +
+        "\n<code>" +
+        esc(ca) +
+        "</code>" +
+        FOOTER,
+      parse_mode: "HTML",
+      reply_markup: analysisKeyboard(ca),
+    });
+    rememberOwner(ctx.chat.id, sent.message_id, ctx.from && ctx.from.id);
+  } catch (e) {
+    await ctx.reply("Analysis failed: " + (e && e.message ? e.message : "fail") + FOOTER);
+  }
+});
+bot.callbackQuery(/^ref:(.+)$/, async (ctx) => {
+  const ca = ctx.match[1];
+  if (isEvmCa(ca)) return ctx.answerCallbackQuery({ text: "Use RH refresh" });
+  await ctx.answerCallbackQuery({ text: "Refreshing..." });
+  try {
+    const report = await buildReport(ca);
+    await ctx.editMessageText(report + "\nUpdated: " + utc(new Date()), {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+      reply_markup: kb(ca),
+    });
+  } catch (_) {
+    await ctx.answerCallbackQuery({ text: "failed" });
+  }
+});
+
+bot.callbackQuery(/^vamp:(.+)$/, async (ctx) => {
+  const ca = ctx.match[1];
+  if (isEvmCa(ca)) return ctx.answerCallbackQuery({ text: "Use RH vamp" });
+  await ctx.answerCallbackQuery({ text: "Vamp check..." });
+  try {
+    const text = await buildVamp(ca);
+    await ctx.editMessageText(text, {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+      reply_markup: kb(ca),
+    });
+  } catch (_) {
+    await ctx.answerCallbackQuery({ text: "failed" });
+  }
+});
+
+bot.callbackQuery(/^bundle:(.+)$/, async (ctx) => {
+  const ca = ctx.match[1];
+  if (isEvmCa(ca)) {
+    return ctx.answerCallbackQuery({ text: "Bundle is Solana only", show_alert: true });
+  }
+  await ctx.answerCallbackQuery({ text: "Bundles..." });
+  try {
+    const text = await buildBundle(ca);
+    await ctx.editMessageText(text, {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+      reply_markup: kb(ca),
+    });
+  } catch (_) {
+    await ctx.answerCallbackQuery({ text: "failed" });
+  }
+});
+
+bot.callbackQuery(/^dev:(.+)$/, async (ctx) => {
+  const ca = ctx.match[1];
+  if (isEvmCa(ca)) {
+    return ctx.answerCallbackQuery({ text: "Dev history is Solana only", show_alert: true });
+  }
+  await ctx.answerCallbackQuery({ text: "Dev history..." });
+  try {
+    const text = await buildDev(ca);
+    await ctx.editMessageText(text, {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+      reply_markup: kb(ca),
+    });
+  } catch (_) {
+    await ctx.answerCallbackQuery({ text: "failed" });
+  }
+});
+
+bot.callbackQuery(/^callouts:(.+)$/, async (ctx) => {
+  const ca = ctx.match[1];
+  if (isEvmCa(ca)) {
+    return ctx.answerCallbackQuery({ text: "Callouts are Pump.fun only", show_alert: true });
+  }
+  await ctx.answerCallbackQuery({ text: "Callouts..." });
+  try {
+    const text = await buildCallouts(ca);
+    await ctx.editMessageText(text, {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+      reply_markup: kb(ca),
+    });
+  } catch (_) {
+    await ctx.answerCallbackQuery({ text: "failed" });
+  }
+});
+
+bot.callbackQuery(/^sf:(.+)$/, async (ctx) => {
+  const ca = ctx.match[1];
+  if (isEvmCa(ca)) return ctx.answerCallbackQuery({ text: "Use RH Stonks" });
+  await ctx.answerCallbackQuery({ text: "StonkFun..." });
+  try {
+    const text = await buildStonks(ca);
+    await ctx.editMessageText(text, {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+      reply_markup: kb(ca),
+    });
+  } catch (_) {
+    await ctx.answerCallbackQuery({ text: "failed" });
+  }
+});
+
+bot.callbackQuery(/^rhsf:(.+)$/, async (ctx) => {
+  await ctx.answerCallbackQuery({ text: "stonks.fun..." });
+  try {
+    const text = await buildStonks(ctx.match[1]);
+    await ctx.editMessageText(text, {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+      reply_markup: kbRh(ctx.match[1]),
+    });
+  } catch (_) {
+    await ctx.answerCallbackQuery({ text: "failed" });
+  }
+});
+
+bot.callbackQuery(/^watch:(.+)$/, async (ctx) => {
+  await ctx.answerCallbackQuery({ text: "Watch is turned off", show_alert: true });
+});
+
+bot.callbackQuery(/^wref:(.+)$/, async (ctx) => {
+  const raw = String(ctx.match[1] || "");
+  let chain = "sol";
+  let ca = raw;
+  const m = raw.match(/^(eth|bnb|rh|trx|sol|arc):(.+)$/i);
+  if (m) {
+    chain = m[1].toLowerCase();
+    ca = m[2];
+  }
+  await ctx.answerCallbackQuery({ text: "Wallet refresh..." });
+  try {
+    const text = await buildWallet(ca, "", chain);
+    await ctx.editMessageText(text + "\nUpdated: " + utc(new Date()), {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+      reply_markup: kbWallet(ca, chain),
+    });
+  } catch (_) {
+    await ctx.answerCallbackQuery({ text: "failed" });
+  }
+});
+
+bot.callbackQuery(/^rhref:(.+)$/, async (ctx) => {
+  await ctx.answerCallbackQuery({ text: "RH refresh..." });
+  try {
+    const report = await buildRhReport(ctx.match[1]);
+    await ctx.editMessageText(report + "\nUpdated: " + utc(new Date()), {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+      reply_markup: kbRh(ctx.match[1]),
+    });
+  } catch (_) {
+    await ctx.answerCallbackQuery({ text: "failed" });
+  }
+});
+
+bot.callbackQuery(/^rhvamp:(.+)$/, async (ctx) => {
+  await ctx.answerCallbackQuery({ text: "RH vamp..." });
+  try {
+    const text = await buildRhVamp(ctx.match[1]);
+    await ctx.editMessageText(text, {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+      reply_markup: kbRh(ctx.match[1]),
+    });
+  } catch (_) {
+    await ctx.answerCallbackQuery({ text: "failed" });
+  }
+});
+
+bot.callbackQuery(/^rhbundle:(.+)$/, async (ctx) => {
+  await ctx.answerCallbackQuery({ text: "RH clusters..." });
+  try {
+    const text = await buildRhBundle(ctx.match[1]);
+    await ctx.editMessageText(text, {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+      reply_markup: kbRh(ctx.match[1]),
+    });
+  } catch (_) {
+    await ctx.answerCallbackQuery({ text: "failed" });
+  }
+});
+
+bot.callbackQuery(/^rhhold:(.+)$/, async (ctx) => {
+  await ctx.answerCallbackQuery({ text: "RH holders..." });
+  try {
+    const text = await buildRhHolders(ctx.match[1]);
+    await ctx.editMessageText(text, {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+      reply_markup: kbRh(ctx.match[1]),
+    });
+  } catch (_) {
+    await ctx.answerCallbackQuery({ text: "failed" });
+  }
+});
+
+bot.callbackQuery(/^rhlore:(.+)$/, async (ctx) => {
+  await ctx.answerCallbackQuery({ text: "RH lore..." });
+  try {
+    const text = await buildRhLore(ctx.match[1]);
+    await ctx.editMessageText(text, {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+      reply_markup: kbRh(ctx.match[1]),
+    });
+  } catch (_) {
+    await ctx.answerCallbackQuery({ text: "failed" });
+  }
+});
+
+bot.callbackQuery(/^rhdev:(.+)$/, async (ctx) => {
+  await ctx.answerCallbackQuery({ text: "RH dev..." });
+  try {
+    const text = await buildRhDev(ctx.match[1]);
+    await ctx.editMessageText(text, {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+      reply_markup: kbRh(ctx.match[1]),
+    });
+  } catch (_) {
+    await ctx.answerCallbackQuery({ text: "failed" });
+  }
+});
+
+bot.callbackQuery(/^arcref:(.+)$/, async (ctx) => {
+  await ctx.answerCallbackQuery({ text: "Arc refresh..." });
+  try {
+    const report = await buildArcReport(ctx.match[1]);
+    await ctx.editMessageText(report + "\nUpdated: " + utc(new Date()), {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+      reply_markup: kbArc(ctx.match[1]),
+    });
+  } catch (_) {
+    await ctx.answerCallbackQuery({ text: "failed" });
+  }
+});
+
+bot.callbackQuery(/^arcvamp:(.+)$/, async (ctx) => {
+  await ctx.answerCallbackQuery({ text: "Arc vamp..." });
+  try {
+    const text = await buildArcVamp(ctx.match[1]);
+    await ctx.editMessageText(text, {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+      reply_markup: kbArc(ctx.match[1]),
+    });
+  } catch (_) {
+    await ctx.answerCallbackQuery({ text: "failed" });
+  }
+});
+
+bot.callbackQuery(/^arcbundle:(.+)$/, async (ctx) => {
+  await ctx.answerCallbackQuery({ text: "Arc clusters..." });
+  try {
+    const text = await buildArcBundle(ctx.match[1]);
+    await ctx.editMessageText(text, {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+      reply_markup: kbArc(ctx.match[1]),
+    });
+  } catch (_) {
+    await ctx.answerCallbackQuery({ text: "failed" });
+  }
+});
+
+bot.callbackQuery(/^archold:(.+)$/, async (ctx) => {
+  await ctx.answerCallbackQuery({ text: "Arc holders..." });
+  try {
+    const text = await buildArcHolders(ctx.match[1]);
+    await ctx.editMessageText(text, {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+      reply_markup: kbArc(ctx.match[1]),
+    });
+  } catch (_) {
+    await ctx.answerCallbackQuery({ text: "failed" });
+  }
+});
+
+bot.callbackQuery(/^arclore:(.+)$/, async (ctx) => {
+  await ctx.answerCallbackQuery({ text: "Arc lore..." });
+  try {
+    const text = await buildArcLore(ctx.match[1]);
+    await ctx.editMessageText(text, {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+      reply_markup: kbArc(ctx.match[1]),
+    });
+  } catch (_) {
+    await ctx.answerCallbackQuery({ text: "failed" });
+  }
+});
+
+bot.callbackQuery(/^arcdev:(.+)$/, async (ctx) => {
+  await ctx.answerCallbackQuery({ text: "Arc dev..." });
+  try {
+    const text = await buildArcDev(ctx.match[1]);
+    await ctx.editMessageText(text, {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+      reply_markup: kbArc(ctx.match[1]),
+    });
+  } catch (_) {
+    await ctx.answerCallbackQuery({ text: "failed" });
+  }
+});
+bot.callbackQuery(/^ghref:(.+)$/, async (ctx) => {
+  const job = ghJobs.get(String(ctx.match[1]));
+  if (!job) {
+    return ctx.answerCallbackQuery({
+      text: "Scan expired. Send the GitHub link again.",
+      show_alert: true,
+    });
+  }
+  await ctx.answerCallbackQuery({ text: "GitHub refresh..." });
+  try {
+    const text = await buildGithubReport(job.owner, job.repo);
+    await ctx.editMessageText(text + "\nUpdated: " + utc(new Date()), {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+      reply_markup: kbGh(ctx.match[1]),
+    });
+  } catch (_) {
+    await ctx.answerCallbackQuery({ text: "failed" });
+  }
+});
+
+bot.callbackQuery(/^ghfees:(.+)$/, async (ctx) => {
+  const job = ghJobs.get(String(ctx.match[1]));
+  if (!job) {
+    return ctx.answerCallbackQuery({
+      text: "Scan expired. Send the GitHub link again.",
+      show_alert: true,
+    });
+  }
+  await ctx.answerCallbackQuery({ text: "Pump GitHub fees..." });
+  try {
+    const userRes = await ghGet("/users/" + encodeURIComponent(job.owner));
+    if (!userRes.ok || !userRes.data || !userRes.data.login) {
+      await ctx.editMessageText("❌ GitHub user not found." + FOOTER, {
+        parse_mode: "HTML",
+      });
+      return;
+    }
+      const [feeBook, mentionTokens] = await Promise.all([
+      pumpFeeByGithub(userRes.data.login, userRes.data.id),
+      searchPumpGithubFeeTokens(userRes.data.login),
+    ]);
+    const text =
+      "👾 <b>Pump GitHub fee scan</b>\n" +
+      "<b>" + esc(userRes.data.login) + "</b>\n" +
+      userRes.data.html_url +
+      "\n\n" +
+      pumpGithubFeeBlock(userRes.data, feeBook, mentionTokens) +
+      "\nUpdated: " + utc(new Date()) +
+      FOOTER;
+    await ctx.editMessageText(text.slice(0, 4000), {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+      reply_markup: kbGh(ctx.match[1]),
+    });
+  } catch (_) {
+    await ctx.answerCallbackQuery({ text: "failed" });
+  }
+});
+bot.callbackQuery(/^xref:(.+)$/, async (ctx) => {
+  const job = xJobs.get(String(ctx.match[1]));
+  if (!job || !job.postId) return ctx.answerCallbackQuery({ text: "Scan expired. Send the link again.", show_alert: true });
+  await ctx.answerCallbackQuery({ text: "X refresh..." });
+  try {
+    const text = await buildXReport(job.postId);
+    await ctx.editMessageText(text + "\nUpdated: " + utc(new Date()), {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+      reply_markup: kbX(ctx.match[1]),
+    });
+  } catch (_) {
+    await ctx.answerCallbackQuery({ text: "failed" });
+  }
+});
+
+bot.callbackQuery(/^advertise$/, async (ctx) => {
+  await ctx.answerCallbackQuery({ text: "Coming soon" });
+  try {
+    await ctx.reply(
+      "📢 <b>Advertise on VEXLORE</b>\n\n" +
+        "Coming soon.\n\n" +
+        "Want to be first in line or need this service now?\n" +
+        "Join the community → <a href=\"https://t.me/VEXLORECOMM\">t.me/VEXLORECOMM</a>" +
+        FOOTER,
+      {
+        parse_mode: "HTML",
+        link_preview_options: { is_disabled: true },
+        reply_markup: new InlineKeyboard().url("💬 VEXLORE Community", "https://t.me/VEXLORECOMM"),
+      }
+    );
+  } catch (_) {}
+});
+
+bot.callbackQuery(/^del$/, async (ctx) => {
+  const msg = ctx.callbackQuery && ctx.callbackQuery.message;
+  if (!msg) return ctx.answerCallbackQuery({ text: "failed" });
+
+  const owner = msgOwners.get(ownerKey(msg.chat.id, msg.message_id));
+  if (!owner || String(ctx.from.id) !== String(owner)) {
+    return ctx.answerCallbackQuery({
+      text: "Only the person who posted this CA can delete it",
+      show_alert: true,
+    });
+  }
+
+  try {
+    await ctx.deleteMessage();
+    msgOwners.delete(ownerKey(msg.chat.id, msg.message_id));
+    await ctx.answerCallbackQuery({ text: "Deleted" });
+  } catch (_) {
+    await ctx.answerCallbackQuery({ text: "Can't delete this message" });
+  }
+});
 
 bot.catch((err) => console.error(err));
 
