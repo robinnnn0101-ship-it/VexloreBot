@@ -13,7 +13,7 @@ const XAI_API_KEY = String(process.env.XAI_API_KEY || process.env.GROK_API_KEY |
 const OPENAI_API_KEY = String(process.env.OPENAI_API_KEY || "").trim();
 const AI_BASE_URL = String(process.env.AI_BASE_URL || "").trim().replace(/\/$/, "");
 const AI_MODEL = String(process.env.AI_MODEL || "").trim();
-const FOOTER = "\n\n❤️ Made by Robin with Love";
+const FOOTER = "\n\n Made by Robin with Love ❤️ ";
 // Prefer Railway volume (or DATA_DIR) so calls survive redeploys.
 const DATA_DIR = process.env.RAILWAY_VOLUME_MOUNT_PATH || process.env.DATA_DIR || __dirname;
 const DATA_FILE = path.join(DATA_DIR, "vexlore-data.json");
