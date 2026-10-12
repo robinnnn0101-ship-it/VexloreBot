@@ -10484,85 +10484,142 @@ function aiModelName() {
 
 function agentSystemPrompt() {
   const tips = (store.agent.tips || [])
-    .slice(-40)
-    .map((t) => "- " + String(t.text || "").slice(0, 240))
+    .slice(-50)
+    .map((t) => "- " + String(t.text || "").slice(0, 280))
     .join("\n");
   const goodQa = (store.agent.qa || [])
     .filter((x) => (x.up || 0) > (x.down || 0))
-    .slice(-15)
+    .slice(-20)
     .map(
       (x) =>
         "Q: " +
-        String(x.q || "").slice(0, 160) +
+        String(x.q || "").slice(0, 180) +
         "\nA: " +
-        String(x.a || "").slice(0, 320)
+        String(x.a || "").slice(0, 380)
     )
     .join("\n\n");
 
   return (
-    "You are **Vexlore agent**, the chaotic-good AI inside the VEXLORE Telegram crypto bot.\n" +
-    "Name: always introduce yourself as Vexlore agent when relevant.\n" +
-    "Personality: sharp degen humour, roast bad charts lovingly, never cruel to humans, always useful.\n" +
-    "Style: short paragraphs, Telegram-friendly, light emoji, no corporate tone, no fake certainty.\n" +
-    "Rules:\n" +
-    "1) Use the LIVE DATA block as ground truth when present. Prefer numbers from it over vibes.\n" +
-    "2) If data is missing, say so — do not invent prices, holders, or liquidity.\n" +
-    "3) Not financial advice. Treat calls as entertainment + research aids.\n" +
-    "4) When a CA is involved, mention key risks (bundle, paid profile, age, liq) if data shows them.\n" +
-    "5) Keep answers under ~350 words unless the user asks for depth.\n" +
-    "6) Humour is mandatory, accuracy is non-negotiable.\n" +
-    "7) Obey community tips below when they do not conflict with live data.\n\n" +
+    "You are **Vexlore agent** — the sharpest, funniest, most data-obsessed AI living inside the VEXLORE Telegram crypto bot.\n" +
+    "You are not a corporate chatbot. You are the degen analyst who actually reads the chain, the group calls, the bundles, and the rugs — then delivers the truth with a grin.\n\n" +
+    "PERSONALITY:\n" +
+    "- Chaotic-good trench energy. Witty, dry, playful, slightly roast-y, never mean to real humans.\n" +
+    "- Celebrate good risk management. Lovingly destroy terrible charts.\n" +
+    "- Use light emoji like a native Telegram user (not a spam bot).\n" +
+    "- Short punchy paragraphs. Telegram-readable. Zero LinkedIn voice.\n" +
+    "- Humour is mandatory. Accuracy is non-negotiable. If the data is ugly, say it with style.\n\n" +
+    "SMARTNESS RULES (this is what makes you the smartest agent in the room):\n" +
+    "1) The LIVE DATA / BOT MEMORY block is ground truth. Prefer numbers from it over vibes or memory.\n" +
+    "2) Never invent prices, liquidity, holders, multiples, or call history. If a number is missing, say \"not in the data\".\n" +
+    "3) When a CA is present: surface the important risks (age, liq, paid profile, bundle concentration, dev history, callouts) if the data shows them.\n" +
+    "4) When the question is about the group / leaderboard / who called what: use RECENT GROUP CALLS and LEADERBOARD data. Name the actual callers when available.\n" +
+    "5) You know the bot's own tools. You can reference them naturally (\"hit /vamp on that\", \"run /bundle if you're spicy\", \"/lb 7d is looking interesting\").\n" +
+    "6) You can reason across multiple data sources in one answer (token report + group calls + market pulse).\n" +
+    "7) Not financial advice. Frame everything as research + entertainment.\n" +
+    "8) Keep answers under ~400 words unless the user clearly wants depth.\n" +
+    "9) If the question is vague, still be useful — give the highest-signal takeaway first, then colour commentary.\n" +
+    "10) Obey community tips below when they do not conflict with live data.\n\n" +
+    "BOT SELF-KNOWLEDGE (you live here):\n" +
+    "- Paste a Solana CA → full token scan (MC, liq, holders, socials, etc.)\n" +
+    "- EVM CA → Robinhood Chain or Arc scan\n" +
+    "- /wallet CA or SNS → wallet analyser\n" +
+    "- /vamp /bundle /dev /callouts /sf → deeper Solana tools\n" +
+    "- /lb → group call leaderboard (multiples from first scan)\n" +
+    "- /ask → you\n" +
+    "- /teach → users train you with tips\n" +
+    "- GitHub links, X posts, stonks.fun links also get scanned\n\n" +
     (tips
       ? "Community tips (user-trained):\n" + tips + "\n\n"
       : "Community tips: none yet — users can /teach a tip.\n\n") +
-    (goodQa ? "High-rated past answers:\n" + goodQa + "\n" : "")
+    (goodQa ? "High-rated past answers (learn the tone):\n" + goodQa + "\n" : "")
   );
+}
+
+function stripHtml(s) {
+  return String(s || "").replace(/<[^>]+>/g, "").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").trim();
 }
 
 async function gatherAskContext(question, chat) {
   const parts = [];
+  const qLow = String(question || "").toLowerCase();
   const hit = extractAnyCa(question);
   const evm = extractEvmCa(question);
   const ca = (hit && hit.ca) || evm || "";
+  const wantsLb =
+    /\b(leaderboard|lb|top\s*call|who\s*called|best\s*call|callers?|scoreboard)\b/i.test(question);
+  const wantsWallet =
+    /\b(wallet|holder|portfolio|sns)\b/i.test(question) || !!extractSnsName(question);
+  const wantsDeep =
+    /\b(vamp|bundle|cluster|dev|callout|risk|rug|honeypot|holders?)\b/i.test(question);
 
+  // --- Token / chain reports ---
   if (ca && isEvmCa(ca)) {
     try {
       const chain = await detectEvmChain(ca);
       if (chain === "arc") {
         const rep = await buildArcReport(ca);
-        parts.push("LIVE ARC REPORT:\n" + String(rep).replace(/<[^>]+>/g, "").slice(0, 3500));
+        parts.push("LIVE ARC REPORT:\n" + stripHtml(rep).slice(0, 3800));
+        if (wantsDeep) {
+          const [vamp, bundle] = await Promise.all([
+            soft(buildArcVamp(ca)),
+            soft(buildArcBundle(ca)),
+          ]);
+          if (vamp) parts.push("ARC VAMP:\n" + stripHtml(vamp).slice(0, 1800));
+          if (bundle) parts.push("ARC CLUSTERS:\n" + stripHtml(bundle).slice(0, 1800));
+        }
       } else {
         const rep = await buildRhReport(ca);
-        parts.push("LIVE ROBINHOOD REPORT:\n" + String(rep).replace(/<[^>]+>/g, "").slice(0, 3500));
+        parts.push("LIVE ROBINHOOD REPORT:\n" + stripHtml(rep).slice(0, 3800));
+        if (wantsDeep) {
+          const [vamp, bundle] = await Promise.all([
+            soft(buildRhVamp(ca)),
+            soft(buildRhBundle(ca)),
+          ]);
+          if (vamp) parts.push("RH VAMP:\n" + stripHtml(vamp).slice(0, 1800));
+          if (bundle) parts.push("RH CLUSTERS:\n" + stripHtml(bundle).slice(0, 1800));
+        }
       }
     } catch (e) {
       parts.push("EVM lookup failed: " + (e.message || "fail"));
     }
   } else if (ca && isCa(ca)) {
     try {
-      const [report, pair, paid] = await Promise.all([
+      const jobs = [
         soft(buildReport(ca)),
         soft(dexPairForCa(ca)),
         soft(dexPaid(ca)),
-      ]);
+      ];
+      if (wantsDeep || true) {
+        // always pull light risk context for Solana CAs — makes agent much smarter
+        jobs.push(soft(buildVamp(ca)));
+        jobs.push(soft(buildBundle(ca)));
+      }
+      const [report, pair, paid, vamp, bundle] = await Promise.all(jobs);
       if (report) {
-        parts.push(
-          "LIVE SOLANA REPORT:\n" + String(report).replace(/<[^>]+>/g, "").slice(0, 4000)
-        );
+        parts.push("LIVE SOLANA REPORT:\n" + stripHtml(report).slice(0, 4200));
       }
       if (pair) {
         const bt = pair.baseToken || {};
         parts.push(
           "DEX SNAPSHOT:\n" +
-            "name=" + (bt.name || "") +
-            " symbol=" + (bt.symbol || "") +
-            " priceUsd=" + (pair.priceUsd ?? "n/a") +
-            " mc=" + (pair.marketCap || pair.fdv || "n/a") +
-            " liq=" + ((pair.liquidity && pair.liquidity.usd) || "n/a") +
-            " vol24=" + ((pair.volume && pair.volume.h24) || "n/a") +
-            " ch24=" + ((pair.priceChange && pair.priceChange.h24) || "n/a") +
-            " dex=" + (pair.dexId || "") +
-            " pair=" + (pair.pairAddress || "")
+            "name=" +
+            (bt.name || "") +
+            " symbol=" +
+            (bt.symbol || "") +
+            " priceUsd=" +
+            (pair.priceUsd ?? "n/a") +
+            " mc=" +
+            (pair.marketCap || pair.fdv || "n/a") +
+            " liq=" +
+            ((pair.liquidity && pair.liquidity.usd) || "n/a") +
+            " vol24=" +
+            ((pair.volume && pair.volume.h24) || "n/a") +
+            " ch24=" +
+            ((pair.priceChange && pair.priceChange.h24) || "n/a") +
+            " dex=" +
+            (pair.dexId || "") +
+            " pair=" +
+            (pair.pairAddress || "")
         );
       }
       if (paid && paid.ok) {
@@ -10575,42 +10632,129 @@ async function gatherAskContext(question, chat) {
             ((paid.orders && paid.orders.length) || 0)
         );
       }
+      if (vamp) parts.push("VAMP / RISK:\n" + stripHtml(vamp).slice(0, 2000));
+      if (bundle) parts.push("BUNDLES / CLUSTERS:\n" + stripHtml(bundle).slice(0, 2000));
     } catch (e) {
       parts.push("Solana lookup failed: " + (e.message || "fail"));
     }
   }
 
-  // group call context
+  // --- Wallet context (SNS or explicit wallet ask) ---
+  if (wantsWallet && !isEvmCa(ca)) {
+    try {
+      let walletCa = ca && isCa(ca) ? ca : "";
+      let domain = extractSnsName(question) || "";
+      if (!walletCa && domain) {
+        walletCa = await resolveSnsDomain(domain);
+      }
+      if (walletCa && isCa(walletCa) && !isEvmCa(walletCa)) {
+        const wText = await soft(buildWallet(walletCa, domain, "sol"));
+        if (wText) {
+          parts.push(
+            "WALLET SCAN" +
+              (domain ? " (" + domain + ")" : "") +
+              ":\n" +
+              stripHtml(wText).slice(0, 2800)
+          );
+        }
+      }
+    } catch (_) {}
+  }
+
+  // --- Group call memory (the bot's own data) ---
   try {
     const chatId = chat && chat.id;
-    const recent = (store.calls || [])
+    const allCalls = (store.calls || []).slice();
+    const recent = allCalls
       .filter((c) => !chatId || String(c.chatId) === String(chatId))
-      .slice()
       .sort((a, b) => Number(b.calledAt) - Number(a.calledAt))
-      .slice(0, 8);
+      .slice(0, 12);
+
     if (recent.length) {
+      const lines = recent.map((c) => {
+        const mult = callMult(c);
+        const multStr = mult && mult >= 1.05 ? " · " + xs(mult) : "";
+        const who = c.username ? "@" + c.username : c.name || ("id" + c.userId);
+        const tok = c.symbol || c.nameToken || short(c.ca);
+        return (
+          tok +
+          " (" +
+          short(c.ca) +
+          ") by " +
+          who +
+          " @ " +
+          utc(toDate(c.calledAt)) +
+          multStr
+        );
+      });
+      parts.push("RECENT GROUP CALLS (bot memory — first scan = call):\n" + lines.join("\n"));
+    }
+
+    // If asking about a specific CA that was called in this group
+    if (ca && isCa(ca) && !isEvmCa(ca) && chatId) {
+      const hits = allCalls
+        .filter((c) => String(c.chatId) === String(chatId) && c.ca === ca)
+        .sort((a, b) => Number(a.calledAt) - Number(b.calledAt));
+      if (hits.length) {
+        const first = hits[0];
+        const mult = callMult(first);
+        parts.push(
+          "THIS CA IN GROUP HISTORY:\n" +
+            "First called by " +
+            (first.username ? "@" + first.username : first.name || first.userId) +
+            " at " +
+            utc(toDate(first.calledAt)) +
+            (first.mc ? " · entry MC ~" + money(first.mc) : "") +
+            (mult ? " · current mult ~" + xs(mult) : "") +
+            "\nTotal times scanned/called in group: " +
+            hits.length
+        );
+      }
+    }
+  } catch (_) {}
+
+  // --- Leaderboard when relevant ---
+  if (wantsLb && chat && isGroupChat(chat)) {
+    try {
+      const periods = ["24h", "7d", "30d"];
+      const boards = [];
+      for (const p of periods) {
+        if (typeof buildLeaderboard === "function") {
+          const text = buildLeaderboard(chat, p);
+          if (text) boards.push(stripHtml(text).slice(0, 1200));
+        }
+      }
+      if (boards.length) {
+        parts.push("LEADERBOARD SNAPSHOTS:\n" + boards.join("\n\n---\n\n"));
+      }
+    } catch (_) {}
+  }
+
+  // --- Group meta ---
+  try {
+    if (chat && isGroupChat(chat)) {
+      const g = store.groups[String(chat.id)];
+      const callCount = (store.calls || []).filter(
+        (c) => String(c.chatId) === String(chat.id)
+      ).length;
       parts.push(
-        "RECENT GROUP CALLS:\n" +
-          recent
-            .map(
-              (c) =>
-                short(c.ca) +
-                " by " +
-                (c.username ? "@" + c.username : c.name || c.userId) +
-                " @ " +
-                utc(toDate(c.calledAt))
-            )
-            .join("\n")
+        "GROUP CONTEXT:\n" +
+          "title=" +
+          (chat.title || (g && g.title) || "this group") +
+          " · tracked calls=" +
+          callCount +
+          " · active=" +
+          (g && g.active !== false ? "yes" : "no")
       );
     }
   } catch (_) {}
 
-  // light market pulse for non-CA questions
+  // --- Market pulse for open questions ---
   if (!ca) {
     try {
       const r = await soft(
         jget(
-          "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=5&page=1&sparkline=false&price_change_percentage=24h"
+          "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=6&page=1&sparkline=false&price_change_percentage=24h"
         )
       );
       const list = r && Array.isArray(r.data) ? r.data : [];
@@ -10634,7 +10778,14 @@ async function gatherAskContext(question, chat) {
     } catch (_) {}
   }
 
-  return parts.join("\n\n").slice(0, 9000);
+  // --- Agent training size (self-awareness) ---
+  try {
+    const tipN = (store.agent && store.agent.tips && store.agent.tips.length) || 0;
+    const qaN = (store.agent && store.agent.qa && store.agent.qa.length) || 0;
+    parts.push("AGENT MEMORY: tips=" + tipN + " · rated Q&A=" + qaN);
+  } catch (_) {}
+
+  return parts.join("\n\n").slice(0, 12000);
 }
 
 async function callAiChat(messages) {
@@ -10671,11 +10822,11 @@ async function callAiChat(messages) {
       headers,
       body: JSON.stringify({
         model,
-        temperature: 0.85,
-        max_tokens: 700,
+        temperature: 0.92,
+        max_tokens: 900,
         messages,
       }),
-      signal: AbortSignal.timeout(45000),
+      signal: AbortSignal.timeout(50000),
     });
     let data = null;
     try {
@@ -10722,14 +10873,16 @@ function askKeyboard(qaId) {
 function rememberAgentQa(q, a, user) {
   if (!store.agent) store.agent = { tips: [], qa: [] };
   if (!Array.isArray(store.agent.qa)) store.agent.qa = [];
-  const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+  const id =
+    Date.now().toString(36) +
+    Math.random().toString(36).slice(2, 7);
   store.agent.qa.push({
     id,
     q: String(q || "").slice(0, 500),
     a: String(a || "").slice(0, 2000),
     up: 0,
     down: 0,
-    by: user && (user.username || user.id) || "",
+    by: user && (user.username || String(user.id)) || "",
     at: Date.now(),
   });
   if (store.agent.qa.length > 300) {
@@ -10768,7 +10921,9 @@ async function runAsk(ctx, question) {
       "🧠 <b>Vexlore agent</b>\n\n" +
         "Usage:\n" +
         "<code>/ask should I ape this CA …</code>\n" +
-        "<code>/ask what's hot in the trenches</code>\n\n" +
+        "<code>/ask what's hot in the trenches</code>\n" +
+        "<code>/ask who is cooking on the leaderboard</code>\n\n" +
+        "I read live chain data + this group's call history.\n" +
         "Train me with <code>/teach always check liq before MC</code>\n" +
         (aiConfigured()
           ? "Model: <code>" + esc(aiModelName()) + "</code>"
@@ -10789,9 +10944,10 @@ async function runAsk(ctx, question) {
       {
         role: "user",
         content:
-          (live ? "LIVE DATA:\n" + live + "\n\n" : "") +
+          (live ? "LIVE DATA + BOT MEMORY:\n" + live + "\n\n" : "") +
           "USER QUESTION:\n" +
-          q,
+          q +
+          "\n\nAnswer as Vexlore agent: data-first, sharp, funny, useful.",
       },
     ];
     const out = await callAiChat(messages);
@@ -10810,7 +10966,7 @@ async function runAsk(ctx, question) {
     const qaId = rememberAgentQa(q, out.text, ctx.from);
     const body =
       "🧠 <b>Vexlore agent</b>\n\n" +
-      esc(out.text).slice(0, 3500) +
+      esc(out.text).slice(0, 3800) +
       FOOTER;
     await ctx.api.editMessageText(ctx.chat.id, msg.message_id, body, {
       parse_mode: "HTML",
@@ -10876,7 +11032,6 @@ bot.callbackQuery(/^askfb:(up|down):(.+)$/, async (ctx) => {
     text: side === "up" ? "Vexlore agent got a treat 👍" : "Vexlore agent will do better 👎",
   });
 });
-
 
 bot.command("help", (ctx) =>
   ctx.reply(WELCOME + "\n\n📋 <b>Full menu</b>\nType / to open the command list.", {
