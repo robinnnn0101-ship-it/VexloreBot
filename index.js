@@ -3924,47 +3924,63 @@ function readTokenStory(pump, name, symbol) {
 
   const themes = [];
   const rules = [
-    [/\b(ai|artificial|gpt|llm|agent|neural|robot)\b/, "AI / agents"],
-    [/\b(dog|doge|shib|inu|puppy|woof)\b/, "dog meme"],
-    [/\b(cat|kitten|neko|meow)\b/, "cat meme"],
-    [/\b(pepe|frog|kek|wojak)\b/, "frog / classic meme"],
-    [/\b(trump|maga|politic|election|biden)\b/, "politics"],
-    [/\b(elon|musk|tesla|spacex|mars)\b/, "Elon / space culture"],
-    [/\b(bitcoin|btc|eth|solana|sol)\b/, "crypto meta"],
-    [/\b(stock|share|equity|tokenized|amazon|apple|nvidia)\b/, "stock / equity narrative"],
-    [/\b(game|gaming|play|pixel|nft)\b/, "gaming / NFT"],
-    [/\b(love|heart|cute|baby|girl|boy)\b/, "cute / emotional meme"],
-    [/\b(moon|rocket|lambo|100x|send)\b/, "pure degen / moonbag"],
-    [/\b(culture|community|movement|revolution)\b/, "community culture"],
-    [/\b(animal|bear|bull|ape|monkey|frog)\b/, "animal mascot"],
+    [/\b(ai|artificial|gpt|llm|agent|neural|robot|claude|grok)\b/, "AI / agents"],
+    [/\b(dog|doge|shib|inu|puppy|woof|shiba)\b/, "dog meme"],
+    [/\b(cat|kitten|neko|meow|kitty)\b/, "cat meme"],
+    [/\b(pepe|frog|kek|wojak|feels?\s*good)\b/, "frog / classic meme"],
+    [/\b(trump|maga|politic|election|biden|harris)\b/, "politics"],
+    [/\b(elon|musk|tesla|spacex|mars|doge)\b/, "Elon / space culture"],
+    [/\b(bitcoin|btc|eth|solana|sol|base)\b/, "crypto meta"],
+    [/\b(stock|share|equity|tokenized|amazon|apple|nvidia|tesla)\b/, "stock / equity narrative"],
+    [/\b(game|gaming|play|pixel|nft|ballet|dance|robot)\b/, "gaming / NFT / interactive"],
+    [/\b(love|heart|cute|baby|girl|boy|mascot)\b/, "cute / emotional meme"],
+    [/\b(moon|rocket|lambo|100x|send|degen)\b/, "pure degen / moonbag"],
+    [/\b(culture|community|movement|revolution|privacy|veil|secret|ghost)\b/, "community / privacy culture"],
+    [/\b(animal|bear|bull|ape|monkey|frog|ghost|veil)\b/, "animal / mascot"],
+    [/\b(privacy|veil|shh|secret|anonymous|zk|zero.?knowledge)\b/, "privacy / secret"],
+    [/\b(skirt|tutu|ballerina|bee|dance|ballet)\b/, "art / interactive character"],
   ];
   for (const [re, label] of rules) {
     if (re.test(blob)) themes.push(label);
   }
-  const uniq = [...new Set(themes)].slice(0, 3);
+  const uniq = [...new Set(themes)].slice(0, 4);
 
   let story = "";
-  if (desc.length >= 20) {
-    // Compress description into a readable one-liner
+  if (desc.length >= 40) {
+    // Prefer real description, cleaned and readable
+    const clean = desc
+      .replace(/\s+/g, " ")
+      .replace(/https?:\/\/\S+/g, "")
+      .replace(/#{1,}/g, "")
+      .trim();
+    story = clean.slice(0, 280) + (clean.length > 280 ? "…" : "");
+  } else if (desc.length >= 15) {
     const clean = desc.replace(/\s+/g, " ").replace(/https?:\/\/\S+/g, "").trim();
-    story = clean.slice(0, 180) + (clean.length > 180 ? "…" : "");
+    story =
+      (n || s) +
+      (s && n ? " ($" + s + ")" : "") +
+      " — " +
+      clean.slice(0, 160) +
+      (clean.length > 160 ? "…" : "");
   } else if (n || s) {
+    const themeBit =
+      uniq.length > 0
+        ? "a " + uniq[0] + (uniq.length > 1 ? " with " + uniq.slice(1).join(" + ") + " energy" : "") + " play"
+        : "a meme / culture play";
     story =
       (n ? n : s) +
       (s && n ? " ($" + s + ")" : "") +
-      " reads as a " +
-      (uniq[0] || "meme / culture") +
-      " token" +
-      (uniq.length > 1 ? " with " + uniq.slice(1).join(" + ") + " flavor" : "") +
-      ".";
+      " is " +
+      themeBit +
+      ". Limited on-chain description — the name and ticker carry most of the narrative.";
   } else {
     story = "No on-chain description. Thin lore — name/ticker only.";
   }
 
-  if (uniq.length && desc.length >= 20) {
+  if (uniq.length && desc.length >= 40) {
     story += " Themes: " + uniq.join(", ") + ".";
   }
-  return { story, themes: uniq, desc: desc.slice(0, 220) || "" };
+  return { story, themes: uniq, desc: desc.slice(0, 320) || "" };
 }
 
 function lore(pump, ogTag, bundlePct, sniperPct, mc, name, symbol) {
@@ -5692,6 +5708,18 @@ async function recordCall(ctx, ca) {
   const meta = quoteMeta(pump, pair);
   const now = Date.now();
 
+  // Capture what the user actually said around the CA (makes the agent smarter)
+  let msgSnippet = "";
+  try {
+    const rawMsg = String((ctx.message && ctx.message.text) || "").trim();
+    // strip the pure CA itself so we keep the human comment
+    msgSnippet = rawMsg
+      .replace(new RegExp(ca.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 280);
+  } catch (_) {}
+
   store.calls.push({
     id: chat.id + ":" + user.id + ":" + ca + ":" + now,
     chatId: chat.id,
@@ -5708,6 +5736,7 @@ async function recordCall(ctx, ca) {
     peakMc: meta.mc,
     peakAt: now,
     url: meta.url,
+    msg: msgSnippet || "",
   });
 
   const cutoff = Date.now() - PEAK_MAX_AGE_MS;
@@ -8976,6 +9005,7 @@ const kb = (ca) =>
     .text("📣 Callouts", "callouts:" + ca)
     .text("📈 Stonks", "sf:" + ca)
     .row()
+    .text("🧠 Lore", "lore:" + ca)
     .text("🧠 Analysis", "analysis:" + ca)
     .text("🗑 Delete", "del")
     .row()
@@ -9454,10 +9484,32 @@ bot.command("holders", async (ctx) => {
 
 bot.command("lore", async (ctx) => {
   const hit = extractAnyCa(ctx.match || ctx.message.text);
-  if (hit.chain !== "rh") return ctx.reply("Usage: /lore 0x…  (Robinhood or Arc)");
+  if (!hit.ca) {
+    return ctx.reply(
+      "Usage: /lore CA\n" +
+        "• Solana: /lore <mint>\n" +
+        "• Robinhood / Arc: /lore 0x…"
+    );
+  }
+
+  touchGroup(ctx.chat);
+
+  // Solana
+  if (hit.chain === "sol" || (isCa(hit.ca) && !isEvmCa(hit.ca))) {
+    const msg = await ctx.reply("🧠 Building lore...");
+    rememberOwner(ctx.chat.id, msg.message_id, ctx.from && ctx.from.id);
+    try {
+      const text = await buildLore(hit.ca);
+      await finishScanMessage(ctx, msg, text, kb(hit.ca), hit.ca);
+    } catch (e) {
+      await ctx.api.editMessageText(ctx.chat.id, msg.message_id, "Error: " + (e.message || "fail"));
+    }
+    return;
+  }
+
+  // EVM (RH / Arc)
   const evmChain = await detectEvmChain(hit.ca);
   if (evmChain === "arc") {
-    touchGroup(ctx.chat);
     const msg = await ctx.reply("🧠 Arc lore...");
     rememberOwner(ctx.chat.id, msg.message_id, ctx.from && ctx.from.id);
     try {
@@ -9468,7 +9520,6 @@ bot.command("lore", async (ctx) => {
     }
     return;
   }
-  touchGroup(ctx.chat);
   const msg = await ctx.reply("🧠 RH lore...");
   rememberOwner(ctx.chat.id, msg.message_id, ctx.from && ctx.from.id);
   try {
@@ -10324,32 +10375,87 @@ async function buildDomainLookup(raw) {
   );
 }
 
-async function buildNarrativeText(ca) {
+async function buildLore(ca) {
   if (isEvmCa(ca)) {
     const chain = await detectEvmChain(ca);
     if (chain === "arc") return buildArcLore(ca);
     return buildRhLore(ca);
   }
-  // solana: reuse lore section from report-ish
-  try {
-    if (typeof buildLore === "function") return await buildLore(ca);
-  } catch (_) {}
-  // fallback: pull description from dexscreener + pump
-  const pair = await dexPairForCa(ca);
-  const pump = await soft(pumpCoin(ca));
-  const desc =
-    (pump && (pump.description || pump.desc)) ||
-    (pair && pair.info && pair.info.imageUrl && "") ||
+  if (!isCa(ca)) return "❌ Invalid Solana CA." + FOOTER;
+
+  const [pump, pair] = await Promise.all([soft(pumpCoin(ca)), soft(dexPairForCa(ca) || dexPair(ca))]);
+  const name = (pump && pump.name) || (pair && pair.baseToken && pair.baseToken.name) || "";
+  const symbol = (pump && pump.symbol) || (pair && pair.baseToken && pair.baseToken.symbol) || "";
+  const desc = String((pump && (pump.description || pump.desc)) || "").trim();
+  const website =
+    (pump && (pump.website || pump.web || pump.uri)) ||
+    (pair && pair.info && pair.info.websites && pair.info.websites[0] && (pair.info.websites[0].url || pair.info.websites[0])) ||
     "";
-  const name = (pair && pair.baseToken && pair.baseToken.name) || (pump && pump.name) || "";
-  const sym = (pair && pair.baseToken && pair.baseToken.symbol) || (pump && pump.symbol) || "";
-  return (
-    "📖 <b>Narrative</b>\n" +
-    "<b>" + esc(name) + " (" + esc(sym) + ")</b>\n" +
-    "<code>" + esc(ca) + "</code>\n\n" +
-    (desc ? esc(String(desc).slice(0, 800)) : "No on-chain narrative text found. Use full CA scan for lore score.") +
-    FOOTER
-  );
+  const twitter =
+    (pump && (pump.twitter || pump.twitter_username)) ||
+    (pair && pair.info && pair.info.socials && pair.info.socials.find((s) => /twitter|x/i.test(s.type || s))) ||
+    "";
+  const telegram = (pump && (pump.telegram || pump.tg)) || "";
+
+  // Score (same logic as main sheet)
+  let ogTag = "CHECK";
+  try {
+    const fam = await soft(findOgFamily(ca, pump, pair));
+    if (fam && fam.isOg) ogTag = "OG";
+    else if (fam && fam.og) ogTag = "VAMP";
+  } catch (_) {}
+  let bPct = 0;
+  let sniperPct = 0;
+  try {
+    // light bundle/sniper if available from existing helpers; ignore failures
+    if (typeof buildBundle === "function") {
+      /* keep score path light */
+    }
+  } catch (_) {}
+  const mc = num((pair && (pair.marketCap || pair.fdv)) || (pump && pump.usd_market_cap));
+  const L = lore(pump, ogTag, bPct, sniperPct, mc || 0, name, symbol);
+
+  // Prefer AI narrative (what the token is actually about)
+  let narrative = await generateTokenLore({
+    name,
+    symbol,
+    desc,
+    website: typeof website === "string" ? website : website && website.url,
+    twitter: typeof twitter === "string" ? twitter : (twitter && (twitter.url || twitter.handle || "")),
+    telegram,
+    ca,
+    chain: "sol",
+  });
+
+  if (!narrative) {
+    // solid fallback from improved rule-based story
+    narrative = L.story || L.desc || "No strong narrative found on-chain. Name/ticker only.";
+  }
+
+  const header =
+    "🧠 <b>Lore</b> · " +
+    L.score +
+    "/100 " +
+    esc(L.verdict) +
+    "\n" +
+    "<b>" +
+    esc(name || "Token") +
+    (symbol ? " ($" + esc(symbol) + ")" : "") +
+    "</b>\n" +
+    "<code>" +
+    esc(ca) +
+    "</code>\n\n";
+
+  const notes =
+    L.notes && L.notes.length
+      ? "\n\n📌 " + esc(L.notes.slice(0, 5).join(" · "))
+      : "";
+
+  return (header + esc(narrative) + notes + FOOTER).slice(0, 4000);
+}
+
+async function buildNarrativeText(ca) {
+  return buildLore(ca);
 }
 
 /* ── command registrations ── */
@@ -10482,6 +10588,79 @@ function aiModelName() {
   return "gpt-4o-mini";
 }
 
+/**
+ * Generate high-quality narrative lore ("what is this token about")
+ * Matches the style of good human callouts: clear theme, mascot/story,
+ * related projects, vibe. Falls back to null if AI is not configured.
+ */
+async function generateTokenLore({ name, symbol, desc, website, twitter, telegram, ca, chain }) {
+  if (!aiConfigured()) return null;
+  const n = String(name || "").trim();
+  const s = String(symbol || "").trim();
+  const d = String(desc || "").trim().slice(0, 600);
+  const site = String(website || "").trim();
+  const tw = String(twitter || "").trim();
+  const tg = String(telegram || "").trim();
+  const prompt =
+    "You are a sharp, witty crypto culture writer for the VEXLORE bot. " +
+    "Write a short, engaging 2–4 sentence LORE that answers: WHAT IS THIS TOKEN ABOUT?\n\n" +
+    "Style rules (match these examples exactly in energy):\n" +
+    "- Fun, clear, Telegram-native. No corporate voice. No hype-bro spam.\n" +
+    "- Explain the theme, mascot, story, or concept. Mention related projects if obvious from the data.\n" +
+    "- If description is thin, lean cleverly on name + ticker + any social/website hints.\n" +
+    "- Never invent fake numbers, fake partnerships, or fake history.\n" +
+    "- Output ONLY the lore paragraph(s). No quotes, no 'Lore:', no markdown headers, no CA dump.\n\n" +
+    "Token data:\n" +
+    "Name: " + (n || "unknown") + "\n" +
+    "Symbol: " + (s || "unknown") + "\n" +
+    "Description: " + (d || "none") + "\n" +
+    "Website: " + (site || "none") + "\n" +
+    "Twitter/X: " + (tw || "none") + "\n" +
+    "Telegram: " + (tg || "none") + "\n" +
+    "Chain: " + (chain || "sol") + "\n" +
+    "CA: " + (ca || "") + "\n";
+
+  try {
+    const body = {
+      model: aiModelName(),
+      messages: [
+        { role: "system", content: "You write concise, high-signal crypto token lore for Telegram. Be accurate and stylish." },
+        { role: "user", content: prompt },
+      ],
+      temperature: 0.65,
+      max_tokens: 280,
+    };
+    const res = await fetch(aiEndpoint(), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer " + aiKey(),
+        "User-Agent": "VEXLORE-Bot",
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(22000),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const text =
+      (data &&
+        data.choices &&
+        data.choices[0] &&
+        data.choices[0].message &&
+        data.choices[0].message.content) ||
+      "";
+    const cleaned = String(text || "")
+      .replace(/^["'\s]+|["'\s]+$/g, "")
+      .replace(/^lore\s*[:\-]\s*/i, "")
+      .trim();
+    if (cleaned.length < 40) return null;
+    return cleaned.slice(0, 900);
+  } catch (e) {
+    console.error("generateTokenLore fail", e.message || e);
+    return null;
+  }
+}
+
 function agentSystemPrompt() {
   const tips = (store.agent.tips || [])
     .slice(-50)
@@ -10512,13 +10691,14 @@ function agentSystemPrompt() {
     "1) The LIVE DATA / BOT MEMORY block is ground truth. Prefer numbers from it over vibes or memory.\n" +
     "2) Never invent prices, liquidity, holders, multiples, or call history. If a number is missing, say \"not in the data\".\n" +
     "3) When a CA is present: surface the important risks (age, liq, paid profile, bundle concentration, dev history, callouts) if the data shows them.\n" +
-    "4) When the question is about the group / leaderboard / who called what: use RECENT GROUP CALLS and LEADERBOARD data. Name the actual callers when available.\n" +
-    "5) You know the bot's own tools. You can reference them naturally (\"hit /vamp on that\", \"run /bundle if you're spicy\", \"/lb 7d is looking interesting\").\n" +
-    "6) You can reason across multiple data sources in one answer (token report + group calls + market pulse).\n" +
-    "7) Not financial advice. Frame everything as research + entertainment.\n" +
-    "8) Keep answers under ~400 words unless the user clearly wants depth.\n" +
-    "9) If the question is vague, still be useful — give the highest-signal takeaway first, then colour commentary.\n" +
-    "10) Obey community tips below when they do not conflict with live data.\n\n" +
+    "4) When the question is about the group / leaderboard / who called what: use RECENT GROUP CALLS and LEADERBOARD data. Name the actual callers when available. If the memory includes what they wrote when they shared the CA, quote or paraphrase it — that context is gold.\n" +
+    "5) You keep an eye on the chat. You know which tokens were shared, by whom, and roughly what they said. Use that to answer \"who called X\", \"what did people say about Y\", or \"who has been cooking\".\n" +
+    "6) You know the bot's own tools. You can reference them naturally (\"hit /vamp on that\", \"run /bundle if you're spicy\", \"/lb 7d is looking interesting\", \"/lore for the story\").\n" +
+    "7) You can reason across multiple data sources in one answer (token report + group calls + what was said + market pulse).\n" +
+    "8) Not financial advice. Frame everything as research + entertainment.\n" +
+    "9) Keep answers under ~400 words unless the user clearly wants depth.\n" +
+    "10) If the question is vague, still be useful — give the highest-signal takeaway first, then colour commentary.\n" +
+    "11) Obey community tips below when they do not conflict with live data.\n\n" +
     "BOT SELF-KNOWLEDGE (you live here):\n" +
     "- Paste a Solana CA → full token scan (MC, liq, holders, socials, etc.)\n" +
     "- EVM CA → Robinhood Chain or Arc scan\n" +
@@ -10676,6 +10856,7 @@ async function gatherAskContext(question, chat) {
         const multStr = mult && mult >= 1.05 ? " · " + xs(mult) : "";
         const who = c.username ? "@" + c.username : c.name || ("id" + c.userId);
         const tok = c.symbol || c.nameToken || short(c.ca);
+        const said = c.msg && String(c.msg).trim() ? ' · said: "' + String(c.msg).slice(0, 120) + '"' : "";
         return (
           tok +
           " (" +
@@ -10684,10 +10865,14 @@ async function gatherAskContext(question, chat) {
           who +
           " @ " +
           utc(toDate(c.calledAt)) +
-          multStr
+          multStr +
+          said
         );
       });
-      parts.push("RECENT GROUP CALLS (bot memory — first scan = call):\n" + lines.join("\n"));
+      parts.push(
+        "RECENT GROUP CALLS (bot memory — first scan = call). Includes what the caller wrote when they shared the CA:\n" +
+          lines.join("\n")
+      );
     }
 
     // If asking about a specific CA that was called in this group
@@ -10698,6 +10883,13 @@ async function gatherAskContext(question, chat) {
       if (hits.length) {
         const first = hits[0];
         const mult = callMult(first);
+        const whoSaid = hits
+          .filter((h) => h.msg && String(h.msg).trim())
+          .slice(0, 5)
+          .map((h) => {
+            const who = h.username ? "@" + h.username : h.name || h.userId;
+            return who + ': "' + String(h.msg).slice(0, 140) + '"';
+          });
         parts.push(
           "THIS CA IN GROUP HISTORY:\n" +
             "First called by " +
@@ -10707,7 +10899,10 @@ async function gatherAskContext(question, chat) {
             (first.mc ? " · entry MC ~" + money(first.mc) : "") +
             (mult ? " · current mult ~" + xs(mult) : "") +
             "\nTotal times scanned/called in group: " +
-            hits.length
+            hits.length +
+            (whoSaid.length
+              ? "\nWhat people said when they shared it:\n" + whoSaid.join("\n")
+              : "")
         );
       }
     }
@@ -11625,6 +11820,28 @@ bot.callbackQuery(/^analysis:(.+)$/, async (ctx) => {
     await ctx.reply("Analysis failed: " + (e && e.message ? e.message : "fail") + FOOTER);
   }
 });
+
+bot.callbackQuery(/^lore:(.+)$/, async (ctx) => {
+  const ca = ctx.match[1];
+  if (isEvmCa(ca)) {
+    return ctx.answerCallbackQuery({ text: "Use RH/Arc lore button", show_alert: true });
+  }
+  if (!isCa(ca)) {
+    return ctx.answerCallbackQuery({ text: "Invalid CA", show_alert: true });
+  }
+  await ctx.answerCallbackQuery({ text: "Building lore..." });
+  try {
+    const text = await buildLore(ca);
+    await ctx.editMessageText(text, {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+      reply_markup: kb(ca),
+    });
+  } catch (_) {
+    await ctx.answerCallbackQuery({ text: "failed" });
+  }
+});
+
 bot.callbackQuery(/^ref:(.+)$/, async (ctx) => {
   const ca = ctx.match[1];
   if (isEvmCa(ca)) return ctx.answerCallbackQuery({ text: "Use RH refresh" });
