@@ -3922,6 +3922,17 @@ function readTokenStory(pump, name, symbol) {
   const s = String(symbol || (pump && pump.symbol) || "").trim();
   const blob = (n + " " + s + " " + desc).toLowerCase();
 
+  // Perfect lore for the project's own token (main sheet + analysis card)
+  const normName = (n + " " + s).toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (/vexlore|vexlorebot/.test(normName)) {
+    return {
+      story:
+        "VEXLOREBOT is the token for VEXLORE — a tool that gives fast on-chain reads on Solana CAs, 0x addresses, and GitHub links (OG status, bundles, vamp family, dev history, holders). It runs as a Chrome side panel + Telegram bot. Tagline: \"Stop calling coins you didn't check.\"",
+      themes: ["tool / utility", "crypto research"],
+      desc: desc.slice(0, 320) || "",
+    };
+  }
+
   const themes = [];
   const rules = [
     [/\b(ai|artificial|gpt|llm|agent|neural|robot|claude|grok)\b/, "AI / agents"],
@@ -9496,7 +9507,7 @@ bot.command("lore", async (ctx) => {
 
   // Solana
   if (hit.chain === "sol" || (isCa(hit.ca) && !isEvmCa(hit.ca))) {
-    const msg = await ctx.reply("🧠 Building lore...");
+    const msg = await ctx.reply("🧠 Reading the token & writing lore...");
     rememberOwner(ctx.chat.id, msg.message_id, ctx.from && ctx.from.id);
     try {
       const text = await buildLore(hit.ca);
@@ -10383,19 +10394,37 @@ async function buildLore(ca) {
   }
   if (!isCa(ca)) return "❌ Invalid Solana CA." + FOOTER;
 
-  const [pump, pair] = await Promise.all([soft(pumpCoin(ca)), soft(dexPairForCa(ca) || dexPair(ca))]);
+  const [pump, pair] = await Promise.all([
+    soft(pumpCoin(ca)),
+    soft(typeof dexPairForCa === "function" ? dexPairForCa(ca) : dexPair(ca)),
+  ]);
+
   const name = (pump && pump.name) || (pair && pair.baseToken && pair.baseToken.name) || "";
   const symbol = (pump && pump.symbol) || (pair && pair.baseToken && pair.baseToken.symbol) || "";
-  const desc = String((pump && (pump.description || pump.desc)) || "").trim();
-  const website =
+  let desc = String((pump && (pump.description || pump.desc)) || "").trim();
+
+  // Also pull description from dexscreener info if pump is empty
+  if (!desc && pair && pair.info) {
+    const infoDesc = pair.info.description || pair.info.descripton || "";
+    if (infoDesc) desc = String(infoDesc).trim();
+  }
+
+  let website =
     (pump && (pump.website || pump.web || pump.uri)) ||
-    (pair && pair.info && pair.info.websites && pair.info.websites[0] && (pair.info.websites[0].url || pair.info.websites[0])) ||
     "";
-  const twitter =
-    (pump && (pump.twitter || pump.twitter_username)) ||
-    (pair && pair.info && pair.info.socials && pair.info.socials.find((s) => /twitter|x/i.test(s.type || s))) ||
+  if (!website && pair && pair.info && Array.isArray(pair.info.websites) && pair.info.websites[0]) {
+    website = pair.info.websites[0].url || pair.info.websites[0] || "";
+  }
+
+  let twitter =
+    (pump && (pump.twitter || pump.twitter_username || pump.twitterUsername)) ||
     "";
-  const telegram = (pump && (pump.telegram || pump.tg)) || "";
+  if (!twitter && pair && pair.info && Array.isArray(pair.info.socials)) {
+    const tw = pair.info.socials.find((s) => /twitter|x\.com/i.test(String(s.type || s.url || "")));
+    if (tw) twitter = tw.url || tw.handle || tw || "";
+  }
+
+  const telegram = (pump && (pump.telegram || pump.tg || pump.telegram_username)) || "";
 
   // Score (same logic as main sheet)
   let ogTag = "CHECK";
@@ -10404,32 +10433,34 @@ async function buildLore(ca) {
     if (fam && fam.isOg) ogTag = "OG";
     else if (fam && fam.og) ogTag = "VAMP";
   } catch (_) {}
-  let bPct = 0;
-  let sniperPct = 0;
-  try {
-    // light bundle/sniper if available from existing helpers; ignore failures
-    if (typeof buildBundle === "function") {
-      /* keep score path light */
-    }
-  } catch (_) {}
-  const mc = num((pair && (pair.marketCap || pair.fdv)) || (pump && pump.usd_market_cap));
-  const L = lore(pump, ogTag, bPct, sniperPct, mc || 0, name, symbol);
 
-  // Prefer AI narrative (what the token is actually about)
+  const mc = num((pair && (pair.marketCap || pair.fdv)) || (pump && pump.usd_market_cap));
+  const L = lore(pump, ogTag, 0, 0, mc || 0, name, symbol);
+
+  // Prefer AI / hard-coded narrative
   let narrative = await generateTokenLore({
     name,
     symbol,
     desc,
-    website: typeof website === "string" ? website : website && website.url,
-    twitter: typeof twitter === "string" ? twitter : (twitter && (twitter.url || twitter.handle || "")),
+    website: typeof website === "string" ? website : (website && website.url) || "",
+    twitter: typeof twitter === "string" ? twitter : (twitter && (twitter.url || twitter.handle)) || "",
     telegram,
     ca,
     chain: "sol",
   });
 
   if (!narrative) {
-    // solid fallback from improved rule-based story
-    narrative = L.story || L.desc || "No strong narrative found on-chain. Name/ticker only.";
+    // Better last-resort fallback — never the old "meme / culture play" line if we can avoid it
+    if (desc && desc.length > 30) {
+      narrative = desc.replace(/\s+/g, " ").trim().slice(0, 420);
+    } else if (name || symbol) {
+      narrative =
+        (name || symbol) +
+        (symbol && name ? " ($" + symbol + ")" : "") +
+        " — on-chain description is thin. Check socials / website for the real story.";
+    } else {
+      narrative = "No strong narrative found on-chain yet.";
+    }
   }
 
   const header =
@@ -10594,42 +10625,74 @@ function aiModelName() {
  * related projects, vibe. Falls back to null if AI is not configured.
  */
 async function generateTokenLore({ name, symbol, desc, website, twitter, telegram, ca, chain }) {
-  if (!aiConfigured()) return null;
   const n = String(name || "").trim();
   const s = String(symbol || "").trim();
-  const d = String(desc || "").trim().slice(0, 600);
+  const d = String(desc || "").trim().slice(0, 900);
   const site = String(website || "").trim();
   const tw = String(twitter || "").trim();
   const tg = String(telegram || "").trim();
-  const prompt =
-    "You are a sharp, witty crypto culture writer for the VEXLORE bot. " +
-    "Write a short, engaging 2–4 sentence LORE that answers: WHAT IS THIS TOKEN ABOUT?\n\n" +
-    "Style rules (match these examples exactly in energy):\n" +
-    "- Fun, clear, Telegram-native. No corporate voice. No hype-bro spam.\n" +
-    "- Explain the theme, mascot, story, or concept. Mention related projects if obvious from the data.\n" +
-    "- If description is thin, lean cleverly on name + ticker + any social/website hints.\n" +
-    "- Never invent fake numbers, fake partnerships, or fake history.\n" +
-    "- Output ONLY the lore paragraph(s). No quotes, no 'Lore:', no markdown headers, no CA dump.\n\n" +
-    "Token data:\n" +
+  const caStr = String(ca || "").trim();
+
+  // ── Hard-coded high-quality lore for the project's own token ──
+  const normName = (n + " " + s + " " + caStr).toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (
+    /vexlore|vexlorebot/.test(normName) ||
+    caStr.startsWith("Dw8i5w3XCQqoUaYEphEaU5dzRw2mHyKpDqWmMPoJ")
+  ) {
+    return (
+      "VEXLOREBOT is the token for VEXLORE, a tool that gives a fast on-chain read on Solana contract addresses, 0x addresses, and GitHub links, covering OG status, bundles, vamp family, dev history, and holders.\n\n" +
+      "It runs as a Chrome side panel and a Telegram bot, built for group chats that want to check a coin before calling it. The core OG check is free, while deeper Solana bundle and dev data lives in the Telegram bot. The project's tagline is \"Stop calling coins you didn't check.\""
+    );
+  }
+
+  if (!aiConfigured()) return null;
+
+  const system =
+    "You are the lore brain of VEXLORE — a Telegram crypto research bot. " +
+    "Your single job is to answer clearly and specifically: WHAT IS THIS TOKEN ABOUT?\n\n" +
+    "Write like a smart, slightly witty group member explaining the coin to the chat. " +
+    "Never sound like a corporate bot or a generic AI.\n\n" +
+    "RULES:\n" +
+    "1. First sentence must say what the token/project actually is.\n" +
+    "2. 2–4 sentences max. Short paragraphs. Telegram readable.\n" +
+    "3. Mention the real theme, mascot, product, game, tool, privacy layer, art, or culture.\n" +
+    "4. If description is thin or empty, still try hard. Use the name, ticker, website, and any well-known public knowledge about the project when the name clearly matches a real thing.\n" +
+    "5. Never invent fake numbers, fake partnerships, or fake team claims.\n" +
+    "6. Output ONLY the lore text. No \"Lore:\", no quotes, no headers, no CA, no score, no \"Based on the data\".\n\n" +
+    "PERFECT STYLE EXAMPLES (match this energy exactly):\n\n" +
+    "Example A:\n" +
+    "SHH is a mascot token built around a lavender veil ghost with a finger pressed to its lips, paired with $VEIL.\n\n" +
+    "VEIL is a privacy layer for Solana, and SHH is its little ghost that keeps a secret. As the project puts it, every privacy coin needs a mascot that keeps a secret.\n\n" +
+    "Example B:\n" +
+    "The token takes its name from the Claude Skirt, a tutu worn by a robot bee dancer in a browser-based ballet game by West Lord.\n\n" +
+    "The skirt's outline is sampled from the Claude spark and swept down into a tutu. You order the robot to dance and clap on the beat with Space, with modes like Fouetté Storm. You can play it at mywestlord.github.io/claude-skirt/.\n\n" +
+    "Example C:\n" +
+    "VEXLOREBOT is the token for VEXLORE, a tool that gives a fast on-chain read on Solana contract addresses, 0x addresses, and GitHub links, covering OG status, bundles, vamp family, dev history, and holders.\n\n" +
+    "It runs as a Chrome side panel and a Telegram bot, built for group chats that want to check a coin before calling it. The project's tagline is \"Stop calling coins you didn't check.\"";
+
+  const userPrompt =
+    "Write the lore for this token. Be specific. Start with what it actually is.\n\n" +
     "Name: " + (n || "unknown") + "\n" +
-    "Symbol: " + (s || "unknown") + "\n" +
-    "Description: " + (d || "none") + "\n" +
+    "Symbol: $" + (s || "???") + "\n" +
+    "On-chain description: " + (d || "(empty — work with name + ticker + links)") + "\n" +
     "Website: " + (site || "none") + "\n" +
     "Twitter/X: " + (tw || "none") + "\n" +
     "Telegram: " + (tg || "none") + "\n" +
     "Chain: " + (chain || "sol") + "\n" +
-    "CA: " + (ca || "") + "\n";
+    "CA: " + caStr + "\n\n" +
+    "If the description is empty, still produce a useful 2–3 sentence explanation based on the name and any links. Do not write generic filler like \"meme / culture play\" or \"limited on-chain description\".";
 
   try {
     const body = {
       model: aiModelName(),
       messages: [
-        { role: "system", content: "You write concise, high-signal crypto token lore for Telegram. Be accurate and stylish." },
-        { role: "user", content: prompt },
+        { role: "system", content: system },
+        { role: "user", content: userPrompt },
       ],
-      temperature: 0.65,
-      max_tokens: 280,
+      temperature: 0.72,
+      max_tokens: 360,
     };
+
     const res = await fetch(aiEndpoint(), {
       method: "POST",
       headers: {
@@ -10638,23 +10701,40 @@ async function generateTokenLore({ name, symbol, desc, website, twitter, telegra
         "User-Agent": "VEXLORE-Bot",
       },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(22000),
+      signal: AbortSignal.timeout(28000),
     });
-    if (!res.ok) return null;
+
+    if (!res.ok) {
+      const errText = await res.text().catch(() => "");
+      console.error("generateTokenLore HTTP", res.status, errText.slice(0, 300));
+      return null;
+    }
+
     const data = await res.json();
-    const text =
+    let text =
       (data &&
         data.choices &&
         data.choices[0] &&
         data.choices[0].message &&
         data.choices[0].message.content) ||
       "";
-    const cleaned = String(text || "")
+
+    text = String(text || "")
       .replace(/^["'\s]+|["'\s]+$/g, "")
-      .replace(/^lore\s*[:\-]\s*/i, "")
+      .replace(/^lore\s*[:\-–]\s*/i, "")
+      .replace(/^here'?s?\s+(the\s+)?lore[:\s]*/i, "")
+      .replace(/^based on (the )?(provided )?data[,:\s]*/i, "")
       .trim();
-    if (cleaned.length < 40) return null;
-    return cleaned.slice(0, 900);
+
+    // Only reject truly useless answers
+    const useless =
+      /^(meme\s*\/\s*culture play|limited on-chain description|no (strong )?narrative|unknown token|thin lore)/i;
+    if (text.length < 45 || useless.test(text)) {
+      console.error("generateTokenLore rejected weak output:", text.slice(0, 160));
+      return null;
+    }
+
+    return text.slice(0, 980);
   } catch (e) {
     console.error("generateTokenLore fail", e.message || e);
     return null;
@@ -11829,7 +11909,7 @@ bot.callbackQuery(/^lore:(.+)$/, async (ctx) => {
   if (!isCa(ca)) {
     return ctx.answerCallbackQuery({ text: "Invalid CA", show_alert: true });
   }
-  await ctx.answerCallbackQuery({ text: "Building lore..." });
+  await ctx.answerCallbackQuery({ text: "Writing lore..." });
   try {
     const text = await buildLore(ca);
     await ctx.editMessageText(text, {
