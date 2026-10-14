@@ -6324,7 +6324,7 @@ async function buildAnalysisCard(ca) {
     let twitter = (pump && (pump.twitter || pump.twitter_username)) || "";
     let telegram = (pump && (pump.telegram || pump.tg)) || "";
     let desc = String((pump && (pump.description || pump.desc)) || "").trim();
-    const aiStory = await generateTokenLore({
+    const aiRes = await generateTokenLore({
       name,
       symbol,
       desc,
@@ -6334,9 +6334,9 @@ async function buildAnalysisCard(ca) {
       ca,
       chain: "sol",
     });
-    if (aiStory && aiStory.length > 40) {
-      L.story = aiStory;
-      L.desc = aiStory;
+    if (aiRes && aiRes.ok && aiRes.text && aiRes.text.length > 40) {
+      L.story = aiRes.text;
+      L.desc = aiRes.text;
     }
   } catch (e) {
     console.error("analysis card lore fail", e.message || e);
@@ -10426,7 +10426,7 @@ async function buildLore(ca) {
   const symbol = (pump && pump.symbol) || (pair && pair.baseToken && pair.baseToken.symbol) || "";
   let desc = String((pump && (pump.description || pump.desc)) || "").trim();
   if (!desc && pair && pair.info) {
-    desc = String(pair.info.description || pair.info.descripton || "").trim();
+    desc = String(pair.info.description || "").trim();
   }
 
   let website = (pump && (pump.website || pump.web || pump.uri)) || "";
@@ -10441,18 +10441,7 @@ async function buildLore(ca) {
   }
   const telegram = (pump && (pump.telegram || pump.tg || pump.telegram_username)) || "";
 
-  let ogTag = "CHECK";
-  try {
-    const fam = await soft(findOgFamily(ca, pump, pair));
-    if (fam && fam.isOg) ogTag = "OG";
-    else if (fam && fam.og) ogTag = "VAMP";
-  } catch (_) {}
-
-  const mc = num((pair && (pair.marketCap || pair.fdv)) || (pump && pump.usd_market_cap));
-  const L = lore(pump, ogTag, 0, 0, mc || 0, name, symbol);
-
-  // Always try AI first
-  let narrative = await generateTokenLore({
+  const result = await generateTokenLore({
     name,
     symbol,
     desc,
@@ -10463,15 +10452,22 @@ async function buildLore(ca) {
     chain: "sol",
   });
 
-  // Last resort: still never show the weak "check socials" line
-  if (!narrative) {
-    if (desc && desc.length > 40) {
-      narrative = desc.replace(/\s+/g, " ").trim().slice(0, 450);
+  let narrative = "";
+  if (result && result.ok && result.text) {
+    narrative = result.text;
+  } else {
+    // Temporary visible error so we can see why AI failed (will remove later)
+    const err = (result && result.error) || "unknown";
+    console.error("buildLore AI failed:", err);
+    if (desc && desc.length > 50) {
+      narrative = desc.replace(/\s+/g, " ").trim().slice(0, 500);
     } else {
       narrative =
         (name || symbol || "This token") +
         (symbol && name ? " ($" + symbol + ")" : "") +
-        " is a Solana meme token. The concept lives in the name and image — check the chart and community for the full story.";
+        " — AI lore unavailable right now (" +
+        err.slice(0, 80) +
+        ").";
     }
   }
 
@@ -10485,7 +10481,6 @@ async function buildLore(ca) {
     esc(ca) +
     "</code>\n\n";
 
-  // Clean output — no score noise, no "thin lore" notes for the user-facing lore
   return (header + esc(narrative) + FOOTER).slice(0, 4000);
 }
 
@@ -10606,7 +10601,13 @@ function aiConfigured() {
 }
 
 function aiEndpoint() {
-  if (AI_BASE_URL) return AI_BASE_URL + "/chat/completions";
+  if (AI_BASE_URL) {
+    // Handle cases where user already included /chat/completions or /v1
+    let base = AI_BASE_URL.replace(/\/$/, "");
+    if (/\/chat\/completions$/i.test(base)) return base;
+    if (/\/v1$/i.test(base)) return base + "/chat/completions";
+    return base + "/chat/completions";
+  }
   if (XAI_API_KEY) return "https://api.x.ai/v1/chat/completions";
   return "https://api.openai.com/v1/chat/completions";
 }
@@ -10631,7 +10632,7 @@ function aiModelName() {
 async function generateTokenLore({ name, symbol, desc, website, twitter, telegram, ca, chain }) {
   const n = String(name || "").trim();
   const s = String(symbol || "").trim();
-  const d = String(desc || "").trim().slice(0, 1000);
+  const d = String(desc || "").trim().slice(0, 1200);
   const site = String(website || "").trim();
   const tw = String(twitter || "").trim();
   const tg = String(telegram || "").trim();
@@ -10640,47 +10641,49 @@ async function generateTokenLore({ name, symbol, desc, website, twitter, telegra
   // Hard-coded perfect lore for VEXLORE itself
   const blob = (n + " " + s + " " + caStr).toLowerCase().replace(/[^a-z0-9]/g, "");
   if (/vexlore|vexlorebot/.test(blob) || caStr.startsWith("Dw8i5w3XCQqoUaYEphEaU5dzRw2mHyKpDqWmMPoJ")) {
-    return (
-      "VEXLOREBOT is the token for VEXLORE, a tool that gives a fast on-chain read on Solana contract addresses, 0x addresses, and GitHub links, covering OG status, bundles, vamp family, dev history, and holders.\n\n" +
-      "It runs as a Chrome side panel and a Telegram bot, built for group chats that want to check a coin before calling it. The core OG check is free, while deeper Solana bundle and dev data lives in the Telegram bot. The project's tagline is \"Stop calling coins you didn't check.\""
-    );
+    return {
+      ok: true,
+      text:
+        "VEXLOREBOT is the token for VEXLORE, a tool that gives a fast on-chain read on Solana contract addresses, 0x addresses, and GitHub links, covering OG status, bundles, vamp family, dev history, and holders.\n\n" +
+        "It runs as a Chrome side panel and a Telegram bot, built for group chats that want to check a coin before calling it. The core OG check is free, while deeper Solana bundle and dev data lives in the Telegram bot. The project's tagline is \"Stop calling coins you didn't check.\"",
+    };
   }
 
   if (!aiConfigured()) {
-    console.error("generateTokenLore: AI not configured");
-    return null;
+    return { ok: false, error: "AI not configured (set OPENAI_API_KEY + AI_BASE_URL or XAI_API_KEY)" };
   }
 
-  const system = `You are the lore writer for VEXLORE Telegram bot.
-Your ONLY job is to write a clear, specific, human explanation of WHAT THIS TOKEN IS ABOUT.
+  const system = `You are the lore writer for the VEXLORE Telegram bot.
+Write a clear, specific explanation of WHAT THIS TOKEN IS ABOUT.
 
-Style rules (follow exactly):
-- Write like a smart group member explaining the coin to the chat.
-- 2–4 sentences. Short paragraphs. Telegram readable.
+Style (match exactly):
+- Write like a smart person in a crypto Telegram group explaining the coin.
+- 2–4 sentences. Short paragraphs.
 - First sentence must say what the token/project actually is.
-- Focus on the concept, meme, mascot, product, culture, or joke.
+- Talk about the concept, meme, product, mascot, or culture.
 - NEVER mention missing socials, missing website, thin description, on-chain data, or "limited information".
-- NEVER write generic filler like "meme / culture play", "name and ticker carry the narrative", "check socials", or "thin lore".
-- If the on-chain description is empty, use the name + ticker + any public knowledge of the concept the name clearly points to.
-- Do not invent fake numbers, fake teams, or fake partnerships.
-- Output ONLY the lore text. No headers, no "Lore:", no quotes, no CA.
+- NEVER write generic filler ("meme / culture play", "name and ticker carry the narrative", "check socials", "thin lore", "Solana meme token. The concept lives in the name").
+- If description is empty, still produce a useful explanation from the name and any public knowledge of what that name clearly refers to.
+- Do not invent fake numbers or fake partnerships.
+- Output ONLY the lore. No headers, no "Lore:", no quotes.
 
-Perfect examples of the exact style you must match:
+Perfect examples:
 
-Example 1:
 SHH is a mascot token built around a lavender veil ghost with a finger pressed to its lips, paired with $VEIL.
 
 VEIL is a privacy layer for Solana, and SHH is its little ghost that keeps a secret. As the project puts it, every privacy coin needs a mascot that keeps a secret.
 
-Example 2:
-The token takes its name from the Claude Skirt, a tutu worn by a robot bee dancer in a browser-based ballet game by West Lord.
+---
 
-The skirt's outline is sampled from the Claude spark and swept down into a tutu. You order the robot to dance and clap on the beat with Space, with modes like Fouetté Storm. You can play it at mywestlord.github.io/claude-skirt/.
-
-Example 3:
 The Tailoor (TAILOOR) is a meme token built around "tailing," the crypto habit of copying the wallets of traders seen as well-informed buyers.
 
-The meme shows a green-capped Wojak checking his phone beside lines like "If he buys it, it must be good," "This one has good wallets," and "Get wallet pings. 10m soon," playing on the rush to follow whale buys and wallet alerts.`;
+The meme shows a green-capped Wojak checking his phone beside lines like "If he buys it, it must be good," "This one has good wallets," and "Get wallet pings. 10m soon," playing on the rush to follow whale buys and wallet alerts.
+
+---
+
+$ROKHA is the token for Rokha, an AI studio and marketplace where people find, run, and tokenize agents, tools, skills, and MCP servers.
+
+Rokha runs published agent skills in an isolated sandbox and traces every step, so they execute instead of sitting idle. Its mascot, rokha_agent, is a glowing librarian figure reading a book, serving as the librarian of the Rokha Network.`;
 
   const userPrompt =
     "Write the lore for this token. Be specific. Start with what it actually is. Never complain about missing data.\n\n" +
@@ -10693,55 +10696,69 @@ The meme shows a green-capped Wojak checking his phone beside lines like "If he 
     "Chain: " + (chain || "sol");
 
   try {
+    const endpoint = aiEndpoint();
+    const model = aiModelName();
+    const key = aiKey();
+    console.log("generateTokenLore calling", endpoint, "model=", model, "name=", n, "symbol=", s);
+
     const body = {
-      model: aiModelName(),
+      model: model,
       messages: [
         { role: "system", content: system },
         { role: "user", content: userPrompt },
       ],
-      temperature: 0.75,
-      max_tokens: 400,
+      temperature: 0.7,
+      max_tokens: 420,
     };
 
-    const res = await fetch(aiEndpoint(), {
+    const res = await fetch(endpoint, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: "Bearer " + aiKey(),
+        Authorization: "Bearer " + key,
         "User-Agent": "VEXLORE-Bot",
+        "HTTP-Referer": "https://t.me/VexloreBOT",
+        "X-Title": "VEXLORE Lore",
       },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(30000),
+      signal: AbortSignal.timeout(32000),
     });
 
+    const raw = await res.text();
     if (!res.ok) {
-      const errText = await res.text().catch(() => "");
-      console.error("generateTokenLore HTTP", res.status, errText.slice(0, 400));
-      return null;
+      console.error("generateTokenLore HTTP", res.status, raw.slice(0, 500));
+      return { ok: false, error: "AI HTTP " + res.status + ": " + raw.slice(0, 180) };
     }
 
-    const data = await res.json();
-    let text =
-      (data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || "";
+    let data;
+    try {
+      data = JSON.parse(raw);
+    } catch (_) {
+      return { ok: false, error: "AI returned non-JSON" };
+    }
 
-    text = String(text || "")
+    let out =
+      (data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) ||
+      (data && data.output_text) ||
+      "";
+
+    out = String(out || "")
       .replace(/^["'\s]+|["'\s]+$/g, "")
       .replace(/^lore\s*[:\-–]\s*/i, "")
       .replace(/^here'?s?\s+(the\s+)?lore[:\s]*/i, "")
       .replace(/^based on (the )?(provided )?data[,:\s]*/i, "")
       .trim();
 
-    // Reject only truly useless generic answers
-    const bad = /meme\s*\/\s*culture play|limited on-chain|name and ticker carry|check socials|thin lore|no strong narrative|on-chain description is thin/i;
-    if (text.length < 50 || bad.test(text)) {
-      console.error("generateTokenLore rejected:", text.slice(0, 180));
-      return null;
+    const bad = /meme\s*\/\s*culture play|limited on-chain|name and ticker carry|check socials|thin lore|concept lives in the name|Solana meme token\. The concept/i;
+    if (out.length < 50 || bad.test(out)) {
+      console.error("generateTokenLore rejected weak output:", out.slice(0, 200));
+      return { ok: false, error: "AI returned weak text" };
     }
 
-    return text.slice(0, 1000);
+    return { ok: true, text: out.slice(0, 1100) };
   } catch (e) {
     console.error("generateTokenLore fail", e.message || e);
-    return null;
+    return { ok: false, error: String(e.message || e).slice(0, 200) };
   }
 }
 
