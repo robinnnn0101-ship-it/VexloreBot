@@ -1,7 +1,7 @@
 # VexloreBot
 
 **Telegram bot for token checks.**  
-Paste a CA on Solana, Robinhood, Arc address, wallet, or `.sol` / `.sns` name → get **one sheet**: OG, bundles, holders, dev history, and lore.
+Paste a CA on Solana, Robinhood, Arc, bnb address, wallet, or `.sol` / `.sns` name → get **one sheet**: OG, bundles, holders, dev history, and lore.
 
 **Live bot:** [t.me/VexloreBOT](https://t.me/VexloreBOT)
 
