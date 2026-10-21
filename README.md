@@ -13,6 +13,7 @@ Paste a CA on Solana, Robinhood, Arc, bnb address, wallet, or `.sol` / `.sns` na
 2. Paste a Solana CA (or Robinhood / Arc 0x)
 3. Read the full sheet (OG / Vamp / Bundles / Holders / Dev / Lore)
 4. Use the buttons or the commands below for deeper reads
+5. use start command
 
 Core OG check stays free.
 
