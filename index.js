@@ -1,1 +1,1 @@
-$(cat /tmp/index.js)
+PLACEHOLDER_TO_BE_REPLACED
