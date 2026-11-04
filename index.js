@@ -11370,20 +11370,31 @@ bot.command("news", async (ctx) => {
   if (ctx.chat?.type !== "private") return ctx.reply("DM only.");
 
   const text = (ctx.match || "").trim();
-  if (!text) return ctx.reply("Usage: /news your message here");
+  const photo = ctx.message?.photo;
+  const hasPhoto = photo && photo.length;
+
+  if (!text && !hasPhoto) {
+    return ctx.reply("Usage:\n/news your message\n\nor send a photo with caption starting with /news");
+  }
 
   const groups = Object.values(store.groups).filter(g => g && g.active !== false);
   if (!groups.length) return ctx.reply("No active groups found.");
 
   let sent = 0, failed = 0;
   const names = [];
+  const fileId = hasPhoto ? photo[photo.length - 1].file_id : null;
+  const caption = text || "";
 
   for (const g of groups) {
     try {
-      await ctx.api.sendMessage(g.id, text, { parse_mode: "HTML" });
+      if (fileId) {
+        await ctx.api.sendPhoto(g.id, fileId, { caption, parse_mode: "HTML" });
+      } else {
+        await ctx.api.sendMessage(g.id, text, { parse_mode: "HTML" });
+      }
       sent++;
       names.push(g.title || String(g.id));
-      await new Promise(r => setTimeout(r, 200));
+      await new Promise(r => setTimeout(r, 250));
     } catch (e) {
       failed++;
     }
