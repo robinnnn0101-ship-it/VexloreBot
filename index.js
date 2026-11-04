@@ -11361,6 +11361,41 @@ bot.callbackQuery(/^askfb:(up|down):(.+)$/, async (ctx) => {
   });
 });
 
+
+// Admin-only news broadcast (private DM only, locked to 6885711430)
+const ADMIN_ID = 6885711430;
+
+bot.command("news", async (ctx) => {
+  if (!ctx.from || ctx.from.id !== ADMIN_ID) return;
+  if (ctx.chat?.type !== "private") return ctx.reply("DM only.");
+
+  const text = (ctx.match || "").trim();
+  if (!text) return ctx.reply("Usage: /news your message here");
+
+  const groups = Object.values(store.groups).filter(g => g && g.active !== false);
+  if (!groups.length) return ctx.reply("No active groups found.");
+
+  let sent = 0, failed = 0;
+  const names = [];
+
+  for (const g of groups) {
+    try {
+      await ctx.api.sendMessage(g.id, text, { parse_mode: "HTML" });
+      sent++;
+      names.push(g.title || String(g.id));
+      await new Promise(r => setTimeout(r, 200));
+    } catch (e) {
+      failed++;
+    }
+  }
+
+  const list = names.slice(0, 20).map(n => "• " + n).join("\n");
+  const more = names.length > 20 ? "\n...and " + (names.length - 20) + " more" : "";
+  await ctx.reply(
+    "Done.\nSent: " + sent + "\nFailed: " + failed + "\n\nGroups:\n" + (list || "none") + more
+  );
+});
+
 bot.command("help", (ctx) =>
   ctx.reply(WELCOME + "\n\n📋 <b>Full menu</b>\nType / to open the command list.", {
     parse_mode: "HTML",
@@ -12399,33 +12434,6 @@ bot.callbackQuery(/^del$/, async (ctx) => {
 });
 
 
-// Admin-only news broadcast (private DM only)
-const ADMIN_ID = 6885711430;
-
-bot.command("news", async (ctx) => {
-  if (ctx.from?.id !== ADMIN_ID) return;
-  if (ctx.chat?.type !== "private") return ctx.reply("DM only.");
-
-  const text = ctx.match?.trim();
-  if (!text) return ctx.reply("Usage: /news your message here");
-
-  const groups = Object.values(store.groups).filter(g => g.active !== false);
-  let sent = 0, failed = 0;
-
-  for (const g of groups) {
-    try {
-      await ctx.api.sendMessage(g.id, text, { parse_mode: "HTML" });
-      sent++;
-      await new Promise(r => setTimeout(r, 150));
-    } catch {
-      failed++;
-    }
-  }
-
-  await ctx.reply(`Done.
-Sent: ${sent}
-Failed: ${failed}`);
-});
 
 bot.catch((err) => console.error(err));
 
