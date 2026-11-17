@@ -1,4 +1,3 @@
-```markdown
 # VexloreBot
 
 **Telegram bot for instant token intel.**
@@ -21,6 +20,7 @@ Paste a Solana CA, Robinhood `0x`, Arc address, BNB/ETH wallet, Tron address, or
 - **AI agent** — `/ask` anything about a token or market (Grok / OpenAI)
 - **Extras** — GitHub repo scan, X/Twitter post scan, StonkFun checks, DEX paid status
 - **Group ready** — Buttons + leaderboard for Telegram chats
+- **NEW** — `/compare`, real funding `/cluster` (30d), `/history`, canvas `/graph`
 
 Core OG check stays free.
 
@@ -60,6 +60,8 @@ Core OG check stays free.
 | `/arc 0x…` | Force Arc chain |
 | `/holders 0x…` | Holders (RH or Arc) |
 | `/lore 0x…` | Lore / story (RH or Arc) |
+| `/compare CA1 CA2` | Side-by-side sheet + holder overlap |
+| `/graph <CA>` | Canvas bar graph of top holders |
 
 ### Wallet analyser
 | Command | Description |
@@ -67,6 +69,8 @@ Core OG check stays free.
 | `/wallet <address>` | Solana wallet or `name.sol` / `name.sns` |
 | `/wallet bnb\|eth\|rh\|arc 0x…` | EVM wallet with chain hint |
 | `/wallet trx T…` | Tron wallet |
+| `/cluster <wallet>` | Funding cluster (last 30d SOL transfers) |
+| `/history <dev wallet>` | Previous launches + rough outcome |
 
 ### Extra tools
 | Command | Description |
@@ -92,6 +96,7 @@ Core OG check stays free.
 - **Wallet check** — `/wallet` + address or `.sol` / `.sns` → strong-holder vs jeeter + trades
 - **AI agent** — `/ask` anything about a token or the market
 - **GitHub / X** — Drop a repo or tweet link for a quick red-flag scan
+- **Compare / Cluster / History** — New tools for deeper illusion breaking
 
 ---
 
@@ -154,4 +159,3 @@ Core checks are free. Deeper reads and AI features may depend on API keys.
 
 **Illusion breaker.**  
 Built for groups that check before they call.
-```
